@@ -1,0 +1,7 @@
+venv/
+data/
+results/features.csv
+.streamlit/secrets.toml
+__pycache__/
+.ipynb_checkpoints/
+*.ipynb
