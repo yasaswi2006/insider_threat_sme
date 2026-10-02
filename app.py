@@ -641,47 +641,52 @@ if page == "Overview":
 
     st.divider()
 
+    # -----------------------------------------------------
+    # USER DISPLAY CONTROL
+    # -----------------------------------------------------
+
     n = st.slider(
         "Number of users to display",
-        5,
-        50,
-        20
+        min_value=5,
+        max_value=1000,
+        value=100,
+        step=5
     )
 
     top = pd.DataFrame(
         safe(get_top, n)
     )
 
-    # Full evaluation population is used for risk distribution.
-    # The selected number of users is still used for the leaderboard.
-    risk_population = pd.DataFrame(
-        safe(get_top, 1000)
-    )
+    # All Overview metrics and charts use the same selected
+    # population. Selecting 1000 represents all backend users.
+    risk_population = top.copy()
 
     # -----------------------------------------------------
     # KPI CALCULATIONS
     # -----------------------------------------------------
 
-    total_users = len(top)
+    total_users = len(risk_population)
 
     high_risk = int(
-        (risk_population["peak_risk"] >= 0.15524637949938055).sum()
+        (
+            risk_population["peak_risk"]
+            >= 0.15524637949938055
+        ).sum()
     )
 
     alert_days = int(
-        top["anomaly_days"].sum()
+        risk_population["anomaly_days"].sum()
     )
 
-    if "ground_truth_insider" in top.columns:
+    if "ground_truth_insider" in risk_population.columns:
 
         insiders = int(
-            top["ground_truth_insider"].sum()
+            risk_population["ground_truth_insider"].sum()
         )
 
     else:
 
         insiders = 0
-
 
     # -----------------------------------------------------
     # KPI CARDS
@@ -718,24 +723,21 @@ if page == "Overview":
             "Active"
         )
 
-
     st.divider()
 
-
     # -----------------------------------------------------
-    # RISK CHART
+    # RISK CHARTS
     # -----------------------------------------------------
 
     left, right = st.columns(
         [1.5, 1]
     )
 
-
     with left:
 
         st.subheader("Top-risk users")
 
-        chart_data = top.sort_values(
+        chart_data = risk_population.sort_values(
             "peak_risk",
             ascending=True
         )
@@ -769,26 +771,32 @@ if page == "Overview":
             use_container_width=True
         )
 
-
     with right:
 
         st.subheader("Risk distribution")
 
         low = int(
-            (risk_population["peak_risk"] < 0.05).sum()
+            (
+                risk_population["peak_risk"]
+                < 0.05
+            ).sum()
         )
 
         medium = int(
             (
                 (risk_population["peak_risk"] >= 0.05)
                 &
-                (risk_population["peak_risk"] < 0.15524637949938055)
+                (
+                    risk_population["peak_risk"]
+                    < 0.15524637949938055
+                )
             ).sum()
         )
 
         high = int(
             (
-                risk_population["peak_risk"] >= 0.15524637949938055
+                risk_population["peak_risk"]
+                >= 0.15524637949938055
             ).sum()
         )
 
@@ -831,7 +839,6 @@ if page == "Overview":
             fig2,
             use_container_width=True
         )
-
 
     # =====================================================
     # TERPE EVALUATION & RISK PROFILING
@@ -880,9 +887,8 @@ if page == "Overview":
         use_container_width=True
     )
 
-
     # -----------------------------------------------------
-    # TABLE
+    # RISK LEADERBOARD
     # -----------------------------------------------------
 
     st.subheader("Risk leaderboard")
