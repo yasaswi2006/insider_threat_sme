@@ -52,7 +52,7 @@ def health():
 
 
 @app.get("/users/top", dependencies=[Depends(auth)])
-def top_users(n: int = Query(20, ge=1, le=100)):
+def top_users(n: int = Query(20, ge=1, le=1000)):
     return json.loads(summary.head(n).to_json(orient="records"))
 
 
