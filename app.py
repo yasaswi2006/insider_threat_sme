@@ -19,6 +19,26 @@ st.set_page_config(
 )
 
 
+
+# =========================================================
+# TERPE DESIGN SYSTEM
+# =========================================================
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+}
+
+.stApp {
+    background: #080B12;
+    color: #F8FAFC;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # =========================================================
 # CONFIGURATION
 # =========================================================
@@ -58,60 +78,412 @@ LABELS = {
 # =========================================================
 # LOGIN
 # =========================================================
-
 def login():
 
     if st.session_state.get("authed"):
         return True
 
-    st.markdown(
-        """
-        <div style="text-align:center; padding-top:70px;">
-            <div style="font-size:55px;">🛡️</div>
-            <h1>Insider Threat Monitor</h1>
-            <p style="font-size:18px;">
-                Behavioral security analytics for SMEs
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    # =========================================================
+    # TERPE LOGIN PAGE — PREMIUM + FUNCTIONAL
+    # =========================================================
+
+    st.markdown("""
+    <style>
+
+    /* ================= PAGE ================= */
+
+    .stApp {
+        background:
+            radial-gradient(
+                circle at 8% 20%,
+                rgba(67, 56, 202, 0.20),
+                transparent 30%
+            ),
+            radial-gradient(
+                circle at 90% 80%,
+                rgba(14, 165, 233, 0.12),
+                transparent 30%
+            ),
+            #030712;
+    }
+
+    .block-container {
+        max-width: 1180px;
+        padding-top: 3.2rem;
+        padding-bottom: 2rem;
+    }
+
+
+    /* ================= LEFT BRAND ================= */
+
+    .terpe-title {
+        font-size: 62px;
+        font-weight: 800;
+        letter-spacing: 8px;
+        line-height: 1;
+        color: #ffffff;
+        margin-bottom: 12px;
+    }
+
+    .terpe-subtitle {
+        font-size: 19px;
+        color: #b9c7dc;
+        margin-bottom: 10px;
+    }
+
+    .terpe-description {
+        max-width: 500px;
+        font-size: 14px;
+        line-height: 1.75;
+        color: #8290a8;
+    }
+
+
+    /* ================= SECURITY CORE ================= */
+
+    .shield-wrapper {
+        height: 275px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 5px 0;
+    }
+
+    .shield {
+        width: 205px;
+        height: 205px;
+
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
+        border-radius: 50%;
+
+        font-size: 88px;
+
+        background:
+            radial-gradient(
+                circle,
+                rgba(59,130,246,0.30),
+                rgba(79,70,229,0.12) 48%,
+                rgba(3,7,18,0.15) 72%,
+                transparent 74%
+            );
+
+        border: 1px solid rgba(96,165,250,0.35);
+
+        box-shadow:
+            0 0 28px rgba(59,130,246,0.30),
+            0 0 65px rgba(79,70,229,0.16),
+            inset 0 0 40px rgba(59,130,246,0.12);
+
+        position: relative;
+    }
+
+    .shield::before {
+        content: "";
+        position: absolute;
+        width: 238px;
+        height: 238px;
+        border-radius: 50%;
+        border: 1px solid rgba(56,189,248,0.10);
+    }
+
+    .shield::after {
+        content: "";
+        position: absolute;
+        width: 275px;
+        height: 275px;
+        border-radius: 50%;
+        border: 1px solid rgba(99,102,241,0.06);
+    }
+
+
+    /* ================= FEATURES ================= */
+
+    .feature {
+        padding: 7px 0;
+        color: #b7c3d7;
+        font-size: 13px;
+    }
+
+    .feature span {
+        color: #38bdf8;
+        margin-right: 9px;
+        font-weight: 700;
+    }
+
+
+    /* ================= REAL STREAMLIT LOGIN CARD ================= */
+
+    /* Streamlit's REAL bordered container */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background:
+            linear-gradient(
+                145deg,
+                rgba(19,30,55,0.96),
+                rgba(7,13,28,0.98)
+            );
+
+        border: 1px solid rgba(148,163,184,0.18) !important;
+
+        border-radius: 26px !important;
+
+        padding: 34px 34px 30px 34px !important;
+
+        box-shadow:
+            0 30px 75px rgba(0,0,0,0.50),
+            0 0 45px rgba(59,130,246,0.08);
+    }
+
+
+    /* ================= ACCESS TEXT ================= */
+
+    .access-title {
+        font-size: 29px;
+        font-weight: 750;
+        color: #ffffff;
+        margin-bottom: 6px;
+    }
+
+    .access-subtitle {
+        color: #8998af;
+        font-size: 14px;
+        line-height: 1.6;
+        margin-bottom: 24px;
+    }
+
+
+    /* ================= PASSWORD ================= */
+
+    div[data-testid="stTextInput"] label {
+        color: #cbd5e1 !important;
+        font-size: 13px !important;
+    }
+
+    div[data-testid="stTextInput"] input {
+        background: rgba(2,6,23,0.90) !important;
+        color: #ffffff !important;
+
+        border: 1px solid #334155 !important;
+        border-radius: 11px !important;
+
+        height: 50px !important;
+
+        font-size: 14px !important;
+    }
+
+    div[data-testid="stTextInput"] input:focus {
+        border-color: #38bdf8 !important;
+
+        box-shadow:
+            0 0 0 1px #38bdf8,
+            0 0 18px rgba(56,189,248,0.12) !important;
+    }
+
+
+    /* ================= LOGIN BUTTON ================= */
+
+    div.stButton > button {
+        width: 100%;
+        height: 50px;
+
+        margin-top: 10px;
+
+        border-radius: 11px;
+
+        background:
+            linear-gradient(
+                100deg,
+                #2563eb,
+                #4f46e5
+            );
+
+        color: #ffffff;
+
+        border: none;
+
+        font-size: 14px;
+        font-weight: 700;
+
+        box-shadow:
+            0 10px 28px rgba(37,99,235,0.22);
+
+        transition: 0.2s ease;
+    }
+
+    div.stButton > button:hover {
+        transform: translateY(-2px);
+
+        box-shadow:
+            0 14px 32px rgba(59,130,246,0.30);
+    }
+
+
+    /* ================= SECURITY FOOTER ================= */
+
+    .security-note {
+        text-align: center;
+        color: #59677d;
+        font-size: 11px;
+        margin-top: 18px;
+    }
+
+    </style>
+    """, unsafe_allow_html=True)
+
+
+    # =========================================================
+    # SECURITY CHECKS
+    # =========================================================
 
     if not APP_PASSWORD:
         st.error("APP_PASSWORD is not configured.")
         return False
 
     if st.session_state.get("attempts", 0) >= 5:
-        st.error("Too many failed attempts. Refresh the page to try again.")
+        st.error(
+            "Too many failed attempts. Refresh the page to try again."
+        )
         return False
 
-    pw = st.text_input(
-        "Dashboard password",
-        type="password"
+
+    # =========================================================
+    # TWO-COLUMN LOGIN LAYOUT
+    # =========================================================
+
+    left, right = st.columns(
+        [1.15, 0.85],
+        gap="large"
     )
 
-    if st.button("Log in", use_container_width=True):
 
-        if hmac.compare_digest(
-            pw.encode(),
-            APP_PASSWORD.encode()
-        ):
-            st.session_state["authed"] = True
-            st.rerun()
+    # =========================================================
+    # LEFT SIDE
+    # =========================================================
 
-        else:
-            st.session_state["attempts"] = (
-                st.session_state.get("attempts", 0) + 1
+    with left:
+
+        st.markdown(
+            '<div class="terpe-title">TERPE</div>',
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            '<div class="terpe-subtitle">'
+            'Threat Exposure & Risk Profiling Engine'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            '<div class="terpe-description">'
+            '<b style="color:#cbd5e1;">'
+            'Behavioral Security Intelligence for SMEs'
+            '</b>'
+            '<br><br>'
+            'Monitor anomalous employee behavior, track accumulated '
+            'risk over time, and investigate potential insider-threat '
+            'signals through explainable security analytics.'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            '''
+            <div class="shield-wrapper">
+                <div class="shield">🛡</div>
+            </div>
+            ''',
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            '''
+            <div class="feature">
+                <span>◆</span>
+                Behavioral anomaly detection
+            </div>
+
+            <div class="feature">
+                <span>◆</span>
+                Stateful risk profiling
+            </div>
+
+            <div class="feature">
+                <span>◆</span>
+                Explainable security intelligence
+            </div>
+
+            <div class="feature">
+                <span>◆</span>
+                SME-focused threat monitoring
+            </div>
+            ''',
+            unsafe_allow_html=True
+        )
+
+
+    # =========================================================
+    # RIGHT SIDE — REAL FUNCTIONAL LOGIN CARD
+    # =========================================================
+
+    with right:
+
+        with st.container(border=True):
+
+            st.markdown(
+                '<div class="access-title">Secure Access</div>',
+                unsafe_allow_html=True
             )
-            st.error("Incorrect password.")
+
+            st.markdown(
+                '<div class="access-subtitle">'
+                'Sign in to your TERPE security dashboard.'
+                '</div>',
+                unsafe_allow_html=True
+            )
+
+            pw = st.text_input(
+                "Dashboard password",
+                type="password",
+                placeholder="Enter your password"
+            )
+
+            if st.button(
+                "Log in to TERPE",
+                use_container_width=True
+            ):
+
+                if hmac.compare_digest(
+                    pw.encode(),
+                    APP_PASSWORD.encode()
+                ):
+
+                    st.session_state["authed"] = True
+                    st.rerun()
+
+                else:
+
+                    st.session_state["attempts"] = (
+                        st.session_state.get("attempts", 0) + 1
+                    )
+
+                    st.error("Incorrect password.")
+
+            st.markdown(
+                '<div class="security-note">'
+                '🔒 Protected TERPE security environment'
+                '</div>',
+                unsafe_allow_html=True
+            )
+
 
     return False
 
 
 if not login():
     st.stop()
-
-
 # =========================================================
 # API FUNCTIONS
 # =========================================================
@@ -453,6 +825,128 @@ if page == "📊 Overview":
             fig2,
             use_container_width=True
         )
+
+
+    # =====================================================
+    # TERPE EVALUATION & RISK PROFILING
+    # =====================================================
+
+    st.divider()
+
+    st.subheader(
+        "🧠 TERPE Evaluation & Risk Profiling"
+    )
+
+    st.write(
+        "TERPE extends basic anomaly detection by combining "
+        "Isolation Forest anomaly scores with stateful risk "
+        "profiling. Instead of treating every unusual day as "
+        "an independent alert, the system tracks accumulated "
+        "risk over time."
+    )
+
+    # -----------------------------------------------------
+    # RISK PROFILE RESULTS
+    # -----------------------------------------------------
+
+    st.markdown("### Risk profile of selected users")
+
+    r1, r2, r3 = st.columns(3)
+
+    r1.metric(
+        "Low-risk users",
+        low
+    )
+
+    r2.metric(
+        "Medium-risk users",
+        medium
+    )
+
+    r3.metric(
+        "High-risk users",
+        high
+    )
+
+    st.caption(
+        "These results represent the users currently selected "
+        "in the dashboard. Risk levels are calculated from "
+        "each user's peak accumulated risk score."
+    )
+
+    # -----------------------------------------------------
+    # TERPE MODEL PIPELINE
+    # -----------------------------------------------------
+
+    st.markdown(
+        "### From anomaly detection to risk profiling"
+    )
+
+    evaluation_data = pd.DataFrame(
+        {
+            "TERPE layer": [
+                "Isolation Forest",
+                "Stateful Risk Engine",
+                "Behavioral Explanation"
+            ],
+            "What it does": [
+                "Identifies unusual daily employee behaviour",
+                "Accumulates and decays risk across time",
+                "Highlights behaviours that deviate from the user's baseline"
+            ]
+        }
+    )
+
+    st.dataframe(
+        evaluation_data,
+        hide_index=True,
+        use_container_width=True
+    )
+
+    st.info(
+        "TERPE's main upgrade is temporal risk tracking. A single "
+        "anomalous event is treated as a risk signal, while repeated "
+        "unusual behaviour can increase accumulated risk. Normal "
+        "behaviour can reduce risk through the configured decay mechanism."
+    )
+
+    # -----------------------------------------------------
+    # INTERPRETATION
+    # -----------------------------------------------------
+
+    st.markdown(
+        "### How to interpret the results"
+    )
+
+    st.markdown(
+        """
+        **Low risk**  
+        User behaviour remains within the lower risk range.
+
+        **Medium risk**  
+        The system detected elevated behavioural risk that should be monitored.
+
+        **High risk**  
+        The user's accumulated risk crossed the configured TERPE alert threshold
+        and warrants investigation.
+
+        **Important:** An anomaly does not automatically mean malicious activity.
+        TERPE identifies behavioural signals that require further investigation
+        rather than treating an anomaly as proof of malicious behaviour.
+        """
+    )
+
+    # -----------------------------------------------------
+    # KNOWN LIMITATION
+    # -----------------------------------------------------
+
+    st.warning(
+        "Known limitation: some routine heavy users can appear anomalous. "
+        "For example, AJF0370 has many anomalous days despite not being "
+        "labelled an insider in the ground truth. This demonstrates that "
+        "anomaly scores should be interpreted as risk signals rather than "
+        "confirmed malicious activity."
+    )
 
 
     # -----------------------------------------------------
