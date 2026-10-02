@@ -14,7 +14,7 @@ import streamlit as st
 
 st.set_page_config(
     page_title="Insider Threat Monitor",
-    page_icon="🛡️",
+    page_icon=":material/security:",
     layout="wide"
 )
 
@@ -577,7 +577,7 @@ def safe(function, *args):
 st.sidebar.markdown(
     """
     <div style="text-align:center;">
-        <div style="font-size:42px;">🛡️</div>
+        <div style="font-size:42px;">TERPE</div>
         <h2>Insider Threat Monitor</h2>
         <p>SME Security Analytics</p>
     </div>
@@ -590,9 +590,9 @@ st.sidebar.divider()
 page = st.sidebar.radio(
     "Navigation",
     [
-        "📊 Overview",
-        "🔍 Investigate User",
-        "⚡ Live Scoring"
+        "Overview",
+        "Investigate User",
+        "Live Scoring"
     ]
 )
 
@@ -630,9 +630,9 @@ if st.sidebar.button(
 # OVERVIEW
 # =========================================================
 
-if page == "📊 Overview":
+if page == "Overview":
 
-    st.title("🛡️ Insider Threat Monitor")
+    st.title("Insider Threat Monitor")
 
     st.caption(
         "Behavioral anomaly detection and accumulated risk monitoring "
@@ -652,6 +652,12 @@ if page == "📊 Overview":
         safe(get_top, n)
     )
 
+    # Full evaluation population is used for risk distribution.
+    # The selected number of users is still used for the leaderboard.
+    risk_population = pd.DataFrame(
+        safe(get_top, 1000)
+    )
+
     # -----------------------------------------------------
     # KPI CALCULATIONS
     # -----------------------------------------------------
@@ -659,7 +665,7 @@ if page == "📊 Overview":
     total_users = len(top)
 
     high_risk = int(
-        (top["peak_risk"] >= 0.15524637949938055).sum()
+        (risk_population["peak_risk"] >= 0.15524637949938055).sum()
     )
 
     alert_days = int(
@@ -769,20 +775,20 @@ if page == "📊 Overview":
         st.subheader("Risk distribution")
 
         low = int(
-            (top["peak_risk"] < 0.05).sum()
+            (risk_population["peak_risk"] < 0.05).sum()
         )
 
         medium = int(
             (
-                (top["peak_risk"] >= 0.05)
+                (risk_population["peak_risk"] >= 0.05)
                 &
-                (top["peak_risk"] < 0.15524637949938055)
+                (risk_population["peak_risk"] < 0.15524637949938055)
             ).sum()
         )
 
         high = int(
             (
-                top["peak_risk"] >= 0.15524637949938055
+                risk_population["peak_risk"] >= 0.15524637949938055
             ).sum()
         )
 
@@ -834,7 +840,7 @@ if page == "📊 Overview":
     st.divider()
 
     st.subheader(
-        "🧠 TERPE Evaluation & Risk Profiling"
+        "TERPE Evaluation & Risk Profiling"
     )
 
     st.write(
@@ -843,35 +849,6 @@ if page == "📊 Overview":
         "profiling. Instead of treating every unusual day as "
         "an independent alert, the system tracks accumulated "
         "risk over time."
-    )
-
-    # -----------------------------------------------------
-    # RISK PROFILE RESULTS
-    # -----------------------------------------------------
-
-    st.markdown("### Risk profile of selected users")
-
-    r1, r2, r3 = st.columns(3)
-
-    r1.metric(
-        "Low-risk users",
-        low
-    )
-
-    r2.metric(
-        "Medium-risk users",
-        medium
-    )
-
-    r3.metric(
-        "High-risk users",
-        high
-    )
-
-    st.caption(
-        "These results represent the users currently selected "
-        "in the dashboard. Risk levels are calculated from "
-        "each user's peak accumulated risk score."
     )
 
     # -----------------------------------------------------
@@ -901,51 +878,6 @@ if page == "📊 Overview":
         evaluation_data,
         hide_index=True,
         use_container_width=True
-    )
-
-    st.info(
-        "TERPE's main upgrade is temporal risk tracking. A single "
-        "anomalous event is treated as a risk signal, while repeated "
-        "unusual behaviour can increase accumulated risk. Normal "
-        "behaviour can reduce risk through the configured decay mechanism."
-    )
-
-    # -----------------------------------------------------
-    # INTERPRETATION
-    # -----------------------------------------------------
-
-    st.markdown(
-        "### How to interpret the results"
-    )
-
-    st.markdown(
-        """
-        **Low risk**  
-        User behaviour remains within the lower risk range.
-
-        **Medium risk**  
-        The system detected elevated behavioural risk that should be monitored.
-
-        **High risk**  
-        The user's accumulated risk crossed the configured TERPE alert threshold
-        and warrants investigation.
-
-        **Important:** An anomaly does not automatically mean malicious activity.
-        TERPE identifies behavioural signals that require further investigation
-        rather than treating an anomaly as proof of malicious behaviour.
-        """
-    )
-
-    # -----------------------------------------------------
-    # KNOWN LIMITATION
-    # -----------------------------------------------------
-
-    st.warning(
-        "Known limitation: some routine heavy users can appear anomalous. "
-        "For example, AJF0370 has many anomalous days despite not being "
-        "labelled an insider in the ground truth. This demonstrates that "
-        "anomaly scores should be interpreted as risk signals rather than "
-        "confirmed malicious activity."
     )
 
 
@@ -983,7 +915,7 @@ if page == "📊 Overview":
 # INVESTIGATE USER
 # =========================================================
 
-elif page == "🔍 Investigate User":
+elif page == "Investigate User":
 
     st.title("🔍 Investigate a User")
 
@@ -1282,7 +1214,7 @@ else:
     st.divider()
 
     if st.button(
-        "🔎 Analyze Activity",
+        "Analyze Activity",
         use_container_width=True
     ):
 
@@ -1331,20 +1263,20 @@ else:
             if result["alert"]:
 
                 st.error(
-                    "🚨 ALERT — accumulated risk is above the alert threshold."
+                    "ALERT — accumulated risk is above the alert threshold."
                 )
 
             elif result["anomalous_day"]:
 
                 st.warning(
-                    "⚠️ Unusual activity detected, but accumulated risk "
+                    "Unusual activity detected, but accumulated risk "
                     "has not reached the alert level."
                 )
 
             else:
 
                 st.success(
-                    "✅ Activity is within the expected behavioral range."
+                    "Activity is within the expected behavioral range."
                 )
 
 
