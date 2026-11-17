@@ -357,7 +357,7 @@ def page_employees():
             k = st.columns(5)
             k[0].metric("Unusual behaviour", f"{s['anomaly_excess']:.2f}")
             k[1].metric("Rule breaks", f"{s['policy_norm']:.2f}")
-            k[2].metric("Attack sequences", int(s["chain_score"]))
+            k[2].metric("Attack sequences", f"{s.get('chain_evidence', s['chain_score']):.2f}")
             k[3].metric("Day score", f"{s['evidence']:.2f}")
             k[4].metric("Risk score after this day", f"{s['risk']:.2f}", "ALERT" if dd["alert"] else None, delta_color="inverse")
             for rsn in dd["reasons"]:
@@ -426,7 +426,7 @@ def page_risk_check():
             c = st.columns(5)
             c[0].metric("Unusual behaviour", f"{res['anomaly_component']:.2f}")
             c[1].metric("Rule breaks", f"{res['policy_component']:.2f}")
-            c[2].metric("Attack sequences", res["chain_component"])
+            c[2].metric("Attack sequences", f"{res.get('chain_evidence', res['chain_component']):.2f}")
             c[3].metric("Day score", f"{res['evidence']:.2f}")
             c[4].metric("Risk score", f"{res['risk']:.2f}")
             c[4].caption(f"Alert line: {res['alert_threshold']:.2f}")
@@ -573,6 +573,14 @@ A real company would set these permissions in its IT policy. The dataset has no 
     ]), hide_index=True, width="stretch")
     st.caption("**Allowed** means the action fits the person's normal setup. **Needs review** means it is unusual but not forbidden. "
                "**Violation** means it breaks an access rule. Every file and logon on the Employees page shows its result and the reason.")
+    st.markdown("""
+**How much each broken rule counts is learned from the data, not chosen by hand.** A rule that is almost never broken
+in the company counts more than one that is broken often. For example, using a USB drive without approval happens on
+only about 4 in every 10,000 employee-days, so it gets the highest weight.
+""")
+    st.caption("Technically, each weight is the rule's *surprisal*: −log₂ of the share of employee-days on which the rule is broken. "
+               "It comes from information theory, needs no answer key, and is recalculated whenever the data changes. "
+               "The same idea weights the attack sequences in Step 4.")
 
     st.subheader("Step 3: Compare behaviour with the past and with colleagues")
     st.markdown("""
@@ -611,8 +619,8 @@ Some actions are only suspicious when they happen **in a particular order on the
     st.markdown("""
 The previous model used only the unusualness score (Step 3), with 6 counts per day. It also compared each day with the
 employee's **whole** history, including days that had not happened yet, which a live system cannot do.
-The current model fixes that, adds the rule checks (Steps 1 and 2) and the attack sequences (Step 4), and shows
-exactly which files, computers and rules caused each alert.
+The current model fixes that, adds the rule checks (Steps 1 and 2) and the attack sequences (Step 4), learns how much
+each one should count from the data, and shows exactly which files, computers and rules caused each alert.
 """)
     st.info("See **Results** for how much each of these changes improves detection.")
 
@@ -624,7 +632,8 @@ LAYER_NAMES = {
     "L2": "+ compare with same-role colleagues",
     "L3": "+ 7 extra behaviour counts",
     "L4": "+ access-rule checks",
-    "L5": "Current model (+ attack sequences)",
+    "L5": "+ attack sequences",
+    "L6": "Current model (+ weights learned from data)",
     "R": "Access rules only, no machine learning",
 }
 
@@ -636,7 +645,7 @@ def page_results():
     ab["key"] = ab["layer"].str.split(" · ").str[0]
     ab["Model"] = ab["key"].map(LAYER_NAMES)
     old = ab[ab["key"] == "L0"].iloc[0]
-    new = ab[ab["key"] == "L5"].iloc[0]
+    new = ab[ab["key"] == "L6"].iloc[0]
     rules = ab[ab["key"] == "R"].iloc[0]
     caught = lambda r: int(str(r["insiders_detected"]).split("/")[0])
     total = int(str(new["insiders_detected"]).split("/")[1])
@@ -686,7 +695,10 @@ so the rows can be compared fairly.
     st.subheader("What the results show")
     st.markdown(f"""
 - **The access-rule checks make the biggest difference.** Adding them raises the insiders flagged during their attack
-  from {caught(ab[ab['key'] == 'L3'].iloc[0])} to {caught(ab[ab['key'] == 'L4'].iloc[0])}. Adding the attack sequences raises it again to {caught(new)}.
+  from {caught(ab[ab['key'] == 'L3'].iloc[0])} to {caught(ab[ab['key'] == 'L4'].iloc[0])}. Adding the attack sequences raises it again to {caught(ab[ab['key'] == 'L5'].iloc[0])}.
+- **Letting the data set the weights removes the guesswork and cuts false alarms.** Instead of hand-picked weights
+  (3 for a violation, 1 for review), each rule is weighted by how rare it is in the company. Detection stays at
+  {caught(new)} of {total}, and wrongly flagged employees drop from {int(ab[ab['key'] == 'L5'].iloc[0]['false_alert_users'])} to {int(new['false_alert_users'])}.
 - **Machine learning on its own does not improve on the previous model.** The second row is slightly worse because it no
   longer looks at future days. That was an unfair advantage the previous model had, which a real system cannot have.
 - **Rules alone find insiders well but raise too many false alarms.** They wrongly flag {int(rules['false_alert_users'])} normal employees.
@@ -698,7 +710,7 @@ so the rows can be compared fairly.
     st.dataframe(pd.DataFrame([
         {"Insider type (from the dataset)": "Starts working late and copying data to USB, then leaves", "Insiders": 30, "Flagged": 29},
         {"Insider type (from the dataset)": "Disgruntled IT administrator plants a keylogger", "Insiders": 10, "Flagged": 10},
-        {"Insider type (from the dataset)": "Job-hunts, then copies data before leaving", "Insiders": 30, "Flagged": 2},
+        {"Insider type (from the dataset)": "Job-hunts, then copies data before leaving", "Insiders": 30, "Flagged": 3},
     ]), hide_index=True, width="stretch")
     st.caption("The job-hunting insiders were already approved to use USB drives, and their main warning sign is visiting job "
                "websites. Web browsing records are not used yet, so this is the clearest area for future work.")
@@ -713,11 +725,14 @@ so the rows can be compared fairly.
 
     st.subheader("Access rules in use")
     pol = ev["policy"]
+    lw = pol.get("learned_weights", {})
     st.dataframe(pd.DataFrame([{"Rule": RULE_TEXT.get(k, k), "Result": "Violation" if v["severity"] >= 3 else "Needs review",
-                                "Weight": v["severity"]} for k, v in pol["rules"].items()]), hide_index=True, width="stretch")
+                                "Weight learned from data": round(lw.get(k, v["severity"]), 1)} for k, v in pol["rules"].items()]),
+                 hide_index=True, width="stretch")
     st.caption(f"Working hours: {pol['work_hours']['start']}:00 to {pol['work_hours']['end']}:00 on weekdays. "
                f"Roles allowed to use several computers and copy program files: {', '.join(pol['multi_pc_roles'])}. "
-               "Weight is how much each broken rule adds to the day score.")
+               "The weight is how much each broken rule adds to the day score. It is learned from the data: "
+               "the rarer a rule break is across the company, the higher its weight.")
 
 # ================================================================== NAVIGATION
 

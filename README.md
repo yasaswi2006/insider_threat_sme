@@ -43,6 +43,7 @@ Small and medium-sized businesses rarely have a security team or expensive monit
 - Checks every sign-in, USB connection and file copy against that setup and marks it **Allowed**, **Needs review** or **Violation**, with the reason.
 - Compares each day's activity with the employee's own past and with colleagues in the same job role, using an Isolation Forest model.
 - Detects known attack sequences, such as signing in after hours, plugging in a USB drive and then copying files.
+- Learns from the data how much each rule break and attack sequence should count, instead of using hand-picked weights.
 - Adds all of this into a running risk score that builds up over repeated suspicious days and fades over quiet ones, and raises an alert when it crosses a set line.
 - Provides a web dashboard with role-based accounts, so each user sees only what their role allows and every action is recorded.
 
@@ -61,7 +62,7 @@ Step 1  Learn each employee's normal setup (first 30 days)
         +--> Step 4  Attack-sequence detection         -> sequence count    c(t)
                      |
                      v
-Step 5  Day score e(t) = a(t) + p(t) + c(t)
+Step 5  Day score e(t) = a(t) + p(t) + c(t)   (p and c use weights learned from data)
         Risk R(t) = 0.8^(days since last activity) x R(t-1) + e(t)
         Alert when R(t) reaches the alert line (top 1% of all employee-days)
 ```
@@ -83,13 +84,15 @@ A real company would set these permissions in its IT policy. The research datase
 
 After the learning window, every event is checked against five rules:
 
-| Rule | Result | Weight |
-|---|---|---|
-| Computer not approved for this person (IT administrators exempt) | Violation | 3 |
-| USB not approved for this person | Violation | 3 |
-| New program file (.exe, .dll, .bat, .msi, .ps1, .vbs) copied by a non-IT employee | Violation | 3 |
-| After-hours work by someone not approved for it | Needs review | 1 |
-| File type the person has never handled before | Needs review | 1 |
+| Rule | Result | Share of employee-days broken | Learned weight |
+|---|---|---|---|
+| USB not approved for this person | Violation | 0.040% | 11.3 |
+| New program file (.exe, .dll, .bat, .msi, .ps1, .vbs) copied by a non-IT employee | Violation | 0.238% | 8.7 |
+| File type the person has never handled before | Needs review | 0.306% | 8.4 |
+| After-hours work by someone not approved for it | Needs review | 0.361% | 8.1 |
+| Computer not approved for this person (IT administrators exempt) | Violation | 0.585% | 7.4 |
+
+The result shown to the analyst (Violation or Needs review) comes from the access policy. How much each broken rule adds to the risk score is learned from the data, as described in 3.6.
 
 The rule-break score for a day is the sum over rules of `weight x ln(1 + number of times broken)`, scaled to a 0 to 3 range. The logarithm stops fifty identical violations from counting fifty times as much as one.
 
@@ -112,9 +115,19 @@ Three ordered patterns are checked within each employee-day, using event timesta
 2. Signs in to a computer that is not theirs, then copies files on that computer.
 3. Uses a USB device for the first time ever and copies files the same day.
 
-### 3.6 Step 5: Risk score and alerts
+### 3.6 Learned weights (surprisal weighting)
 
-The day score is the sum of the three evidence values, each with equal weight, so nothing is tuned on the answer key. The risk score carries over from day to day, losing 20% per calendar day:
+Hand-picked weights (for example 3 for a violation and 1 for a review) are a guess that a reviewer can fairly question. TERPE instead weights each rule and each attack sequence by its **surprisal**, a measure from information theory of how unexpected an event is:
+
+```
+weight(rule) = -log2( share of all employee-days on which the rule is broken )
+```
+
+A rule broken on half of all days would get a weight of 1; a rule broken on 1 day in 1,000 gets about 10. Using a USB drive without approval is the rarest rule break in the dataset (about 4 in 10,000 employee-days), so it receives the highest weight, the same ranking a security expert would give, but derived from the data. The weights need no answer key and are recalculated whenever the data changes. Attack sequences are weighted the same way and scaled so that their average weight is 1.
+
+### 3.7 Step 5: Risk score and alerts
+
+The day score is the sum of the three evidence values. The three parts are added with equal weight, so nothing is tuned on the answer key. The risk score carries over from day to day, losing 20% per calendar day:
 
 ```
 R(t) = 0.8^(days since the previous active day) x R(t-1) + e(t)
@@ -122,9 +135,9 @@ R(t) = 0.8^(days since the previous active day) x R(t-1) + e(t)
 
 An alert is raised when the risk score reaches the alert line. The line is set so that 1% of all employee-days raise an alert, which keeps the workload manageable for a small team. Employees are ranked by the highest risk score they reach.
 
-### 3.7 What changed from the previous model
+### 3.8 What changed from the previous model
 
-The first version of this project used only an Isolation Forest on six daily counts. It also compared each day with the employee's whole history, including future days, which a live system cannot do. The current model removes that look-ahead, adds the rule checks and attack sequences, and records the evidence behind every alert.
+The first version of this project used only an Isolation Forest on six daily counts. It also compared each day with the employee's whole history, including future days, which a live system cannot do. The current model removes that look-ahead, adds the rule checks and attack sequences, learns their weights from the data, and records the evidence behind every alert.
 
 ## 4. Results
 
@@ -138,9 +151,10 @@ To show what each part contributes, the method was built up one step at a time f
 | + compare only with past days | 5 | 7 | 14 | 7 / 70 | 13 | 0.86 | 0.28 |
 | + compare with same-role colleagues | 5 | 9 | 14 | 12 / 70 | 36 | 0.78 | 0.27 |
 | + 7 extra behaviour counts | 5 | 8 | 17 | 21 / 70 | 43 | 0.82 | 0.28 |
-| + rule checks | 8 | 15 | 30 | 33 / 70 | 43 | 0.87 | 0.50 |
-| **Current model (+ attack sequences)** | **10** | **19** | **37** | **40 / 70** | **44** | **0.88** | **0.61** |
-| Rules only, no machine learning | 10 | 20 | 36 | 43 / 70 | 147 | 0.85 | 0.61 |
+| + rule checks (hand-picked weights) | 8 | 15 | 30 | 33 / 70 | 43 | 0.87 | 0.50 |
+| + attack sequences (hand-picked weights) | 10 | 19 | 37 | 40 / 70 | 44 | 0.88 | 0.61 |
+| **Current model (+ weights learned from data)** | **10** | **19** | **37** | **40 / 70** | **40** | **0.88** | **0.61** |
+| Rules only, no machine learning (learned weights) | 10 | 20 | 39 | 43 / 70 | 130 | 0.85 | 0.64 |
 
 **How to read the columns**
 
@@ -153,8 +167,9 @@ To show what each part contributes, the method was built up one step at a time f
 **Findings**
 
 - The rule checks give the largest single improvement, and the attack sequences add to it. The current model catches 40 of 70 insiders during their attack, against 10 for the previous model, usually on the first malicious day.
+- Learning the weights from the data instead of choosing them by hand keeps detection at 40 of 70 and reduces wrongly flagged employees from 44 to 40, while removing an arbitrary choice from the method. Making the weights depend on job role was also tested and gave no further gain.
 - Machine learning alone does not beat the previous model. The second row is lower because it no longer looks at future days, an advantage the previous model had and a live system cannot.
-- Rules alone find insiders well but wrongly flag 147 normal employees. Combining rules with machine learning and the running risk score keeps detection high while cutting false alerts by about 70%.
+- Rules alone find insiders well but wrongly flag 130 normal employees. Combining rules with machine learning and the running risk score keeps detection high while cutting false alerts by about 69%.
 
 **By insider type (current model)**
 
@@ -162,7 +177,7 @@ To show what each part contributes, the method was built up one step at a time f
 |---|---|---|
 | Starts working late and copying data to USB, then leaves | 30 | 29 |
 | Disgruntled IT administrator plants a keylogger | 10 | 10 |
-| Job-hunts, then copies data before leaving | 30 | 2 |
+| Job-hunts, then copies data before leaving | 30 | 3 |
 
 The job-hunting insiders were already approved USB users, and their main warning sign is web browsing, which this version does not use.
 
@@ -255,7 +270,7 @@ insider_threat_sme/
     access_events.parquet  sign-ins and USB connections that were not allowed
     users.parquet          one row per employee: role, department, highest risk, alert days
     ablation.csv           evaluation results
-    policy.json            access rules, working hours, weights
+    policy.json            access rules, working hours, learned weights
     model_v2.joblib        trained model (scikit-learn)
     model_lite.joblib      the same model as plain arrays, used by the backend
   v1_backup/           Code and results of the previous model
@@ -379,5 +394,5 @@ The raw data is not stored in this repository. Run `download_data.py` to fetch i
 - Add web-browsing and email signals (job sites, cloud storage uploads, emails to personal addresses).
 - Test on CERT r5.2 and r6.2; r6.2 also records file opens, edits and deletions.
 - Let administrators edit access permissions in the dashboard instead of learning them.
-- Collect analyst feedback on alerts to adjust rule weights over time.
+- Combine the learned weights with analyst feedback on alerts, so weights adapt to what analysts confirm as real.
 - Send alert notifications by email.

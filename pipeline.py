@@ -373,38 +373,59 @@ def main():
     day = day.merge(obs, on=["user", "day"], how="left")
     day["obs_label"] = day["obs_label"].fillna(0).astype(int)
     day = day.sort_values(["user", "day"]).reset_index(drop=True)
-    p99 = max(np.quantile(day.loc[day["policy_raw"] > 0, "policy_raw"], 0.99), 1e-9) if (day["policy_raw"] > 0).any() else 1.0
-    day["policy_norm"] = (day["policy_raw"] / p99).clip(upper=3.0)
+    p99_fixed = max(np.quantile(day.loc[day["policy_raw"] > 0, "policy_raw"], 0.99), 1e-9) if (day["policy_raw"] > 0).any() else 1.0
+    day["policy_norm_fixed"] = (day["policy_raw"] / p99_fixed).clip(upper=3.0)
+
+    # ---- data-driven (surprisal) weights: a rule or sequence that is rarely seen in the company counts more.
+    # weight = -log2(share of employee-days on which it occurs). Uses no labels.
+    rule_keys = [r for r in pol["rules"] if "n_" + r in day.columns]
+    learned = {r: float(-np.log2(max((day["n_" + r] > 0).mean(), 1e-6))) for r in rule_keys}
+    raw_s = sum(learned[r] * np.log1p(day["n_" + r].astype(float)) for r in rule_keys)
+    p99 = max(np.quantile(raw_s[raw_s > 0], 0.99), 1e-9) if (raw_s > 0).any() else 1.0
+    day["policy_norm_learned"] = (raw_s / p99).clip(upper=3.0)
+    chain_rate = {c: float(day[c].mean()) for c in CHAINS}
+    chain_w = {c: (float(-np.log2(v)) if v > 0 else 0.0) for c, v in chain_rate.items()}
+    chain_mean = float(np.mean([v for v in chain_w.values() if v > 0])) if any(chain_w.values()) else 1.0
+    day["chain_evidence"] = sum(day[c].astype(float) * chain_w[c] for c in CHAINS) / chain_mean
+    pol["learned_weights"] = {r: round(v, 3) for r, v in learned.items()}
+    pol["chain_weights"] = {c: round(v, 3) for c, v in chain_w.items()}
+    print("learned rule weights:", pol["learned_weights"])
+    print("learned chain weights:", pol["chain_weights"])
 
     print("ablation study …")
     z = lambda fs, k: [f + "_" + k for f in fs]
     w = pol["fusion_weights"]
-    variants = {
-        "L0 · TERPE v1 replica": (V1_FEATS + z(V1_FEATS, "zfull"), False, False),
-        "L1 · + causal self-baseline": (V1_FEATS + z(V1_FEATS, "zself"), False, False),
-        "L2 · + peer baseline": (V1_FEATS + z(V1_FEATS, "zself") + z(V1_FEATS, "zpeer"), False, False),
-        "L3 · + context features": (ALL_FEATS + z(ALL_FEATS, "zself") + z(ALL_FEATS, "zpeer"), False, False),
-        "L4 · + policy fusion": (ALL_FEATS + z(ALL_FEATS, "zself") + z(ALL_FEATS, "zpeer"), True, False),
-        "L5 · + exfiltration chains (TERPE v2)": (ALL_FEATS + z(ALL_FEATS, "zself") + z(ALL_FEATS, "zpeer"), True, True),
-        "R · rules only (no ML)": (None, True, True),
+    full = ALL_FEATS + z(ALL_FEATS, "zself") + z(ALL_FEATS, "zpeer")
+    variants = {  # name: (detector input, use rules, use sequences, weights learned from data)
+        "L0 · TERPE v1 replica": (V1_FEATS + z(V1_FEATS, "zfull"), False, False, False),
+        "L1 · + causal self-baseline": (V1_FEATS + z(V1_FEATS, "zself"), False, False, False),
+        "L2 · + peer baseline": (V1_FEATS + z(V1_FEATS, "zself") + z(V1_FEATS, "zpeer"), False, False, False),
+        "L3 · + context features": (full, False, False, False),
+        "L4 · + policy fusion": (full, True, False, False),
+        "L5 · + exfiltration chains": (full, True, True, False),
+        "L6 · + surprisal weights (final model)": (full, True, True, True),
+        "R · rules only (no ML)": (None, True, True, True),
     }
-    rows, final = [], None
-    for name, (cols, use_pol, use_chain) in variants.items():
+    rows, final, cache = [], None, {}
+    for name, (cols, use_pol, use_chain, learn) in variants.items():
         if cols is not None:
-            m, s, ex, thr, top = isolation(day, cols)
+            key = tuple(cols)
+            if key not in cache:  # same detector input -> same model (L3-L6 share one Isolation Forest)
+                cache[key] = isolation(day, cols)
+            m, s, ex, thr, top = cache[key]
         else:
             m, s, ex, thr, top = None, np.zeros(len(day)), np.zeros(len(day)), 0.0, 1.0
         e = w["anomaly"] * ex
         if use_pol:
-            e = e + w["policy"] * day["policy_norm"].values
+            e = e + w["policy"] * day["policy_norm_learned" if learn else "policy_norm_fixed"].values
         if use_chain:
-            e = e + w["chain"] * day["chain_score"].values
+            e = e + w["chain"] * (day["chain_evidence"] if learn else day["chain_score"]).values
         risk = accumulate(day, e, pol["decay"])
         res, alert = evaluate(day, e, risk, insiders, pol["alert_budget"])
         res["layer"] = name
         rows.append(res)
         print(f"  {name:42s} userAUC={res['user_auc']:.3f} P@20={res['p@20']:.2f} detected={res['insiders_detected']}")
-        if name.startswith("L5"):
+        if name.startswith("L6"):
             final = dict(model=m, cols=cols, thr=thr, top=top, s=s, ex=ex, e=e, risk=risk, alert=alert,
                          alert_at=res["alert_threshold"])
     abl = pd.DataFrame(rows).set_index("layer")
@@ -412,10 +433,11 @@ def main():
 
     # ------------------------------------------------ persist final TERPE v2 outputs
     day["anomaly_score"], day["anomaly_excess"] = final["s"], final["ex"]
+    day["policy_norm"] = day["policy_norm_learned"]  # the final model's rule-break score
     day["evidence"], day["risk"], day["alert"] = final["e"], final["risk"], final["alert"]
     day["reasons"] = [json.dumps(reasons_for(r, pol)) for _, r in day.iterrows()]
     keep = (["user", "day", "label", "obs_label", "anomaly_score", "anomaly_excess", "policy_raw", "policy_norm",
-             "chain_score", "evidence", "risk", "alert", "reasons"] + ALL_FEATS + list(CHAINS)
+             "chain_score", "chain_evidence", "evidence", "risk", "alert", "reasons"] + ALL_FEATS + list(CHAINS)
             + z(ALL_FEATS, "zself") + z(ALL_FEATS, "zpeer") + [c for c in day.columns if c.startswith("n_")])
     # small row groups (data is sorted by user) so the API can read one employee without loading everything
     compact(day[keep].copy()).to_parquet(os.path.join(a.out, "daily.parquet"), index=False, row_group_size=4000)
@@ -445,7 +467,8 @@ def main():
     peer.columns = [f"{f}_{s}" for f, s in peer.columns]
     last = day.groupby("user").tail(1).set_index("user")[["day", "risk"]]
     joblib.dump(dict(model=final["model"], cols=final["cols"], thr=final["thr"], top=final["top"],
-                     alert_at=final["alert_at"], policy=pol, feats=ALL_FEATS, p99=p99,
+                     alert_at=final["alert_at"], policy=pol, feats=ALL_FEATS, p99=p99, learned=learned,
+                     chain_w=chain_w, chain_mean=chain_mean,
                      self_base=base, peer_base=peer, last=last,
                      ctx=ctx[["role", "department", "assigned_pc", "usb_approved", "after_hours_approved"]]),
                 os.path.join(a.out, "model_v2.joblib"))

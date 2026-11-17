@@ -47,5 +47,17 @@
     "anomaly": 1.0,
     "policy": 1.0,
     "chain": 1.0
+  },
+  "learned_weights": {
+    "FOREIGN_PC": 7.418,
+    "USB_NOT_PROVISIONED": 11.289,
+    "EXECUTABLE_TRANSFER": 8.713,
+    "AFTER_HOURS": 8.114,
+    "NEW_FILE_TYPE": 8.353
+  },
+  "chain_weights": {
+    "CHAIN_AFTER_HOURS_EXFIL": 12.379,
+    "CHAIN_FOREIGN_PC_TRANSFER": 0.0,
+    "CHAIN_FIRST_MEDIA_BURST": 13.246
   }
 }
