@@ -7,11 +7,11 @@ echo ============================================
 echo Installing / checking packages (first time takes a few minutes)...
 python -m pip install -q -r requirements.txt
 if not exist ".streamlit\secrets.toml" echo API_URL = "http://127.0.0.1:8000"> ".streamlit\secrets.toml"
-set ADMIN_USERNAME=baishakhi
-set OWNER_USERNAME=baishakhi
+set ADMIN_USERNAME=yasaswi
+set OWNER_USERNAME=yasaswi
 if not exist terpe_users.db (
   echo.
-  echo First run: choose the password for your admin account "baishakhi".
+  echo First run: choose the password for your admin account "yasaswi".
   echo Use 10+ characters with upper case, lower case, a number and a symbol.
   set /p ADMIN_PASSWORD=Admin password: 
 )
