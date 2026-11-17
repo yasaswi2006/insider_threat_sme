@@ -61,7 +61,7 @@ files = slim(pd.read_parquet(f"{RESULTS}/file_events.parquet"))
 access = slim(pd.read_parquet(f"{RESULTS}/access_events.parquet"))
 ablation = pd.read_csv(f"{RESULTS}/ablation.csv")
 POL = json.load(open(f"{RESULTS}/policy.json"))
-ALERT_AT = float(ablation.loc[ablation["layer"].str.startswith("L5"), "alert_threshold"].iloc[0])
+ALERT_AT = float(ablation.loc[ablation["layer"].str.startswith("L6"), "alert_threshold"].iloc[0])
 FEATS = ["logons", "distinct_pcs", "after_hours_logons", "usb_connects", "usb_after_hours", "file_copies",
          "foreign_pc_logons", "exe_copies", "distinct_file_types", "files_after_hours",
          "first_usb", "first_after_hours", "first_foreign_pc"]
@@ -321,7 +321,7 @@ def day_detail(uid: str = Path(..., pattern=USER_RE), day: str = Path(..., patte
     a = access[(access["user"] == uid) & (access["ts"].dt.normalize() == ts)].sort_values("ts")
     audit(u.username, "VIEW_EMPLOYEE_DAY", uid, day)
     return {"user": uid, "day": day, "reasons": json.loads(r["reasons"]),
-            "scores": {k: float(r[k]) for k in ("anomaly_score", "anomaly_excess", "policy_norm", "chain_score",
+            "scores": {k: float(r[k]) for k in ("anomaly_score", "anomaly_excess", "policy_norm", "chain_score", "chain_evidence",
                                                  "evidence", "risk")},
             "alert": bool(r["alert"]), "label": int(r["label"]), "deviations": dev[:8],
             "files": records(f.assign(ts=f["ts"].dt.strftime("%H:%M:%S"))),
@@ -379,20 +379,21 @@ def score(b: LiveIn, u: User = Depends(require("analyst"))):
          "FOREIGN_PC": 0 if multi else x["foreign_pc_logons"],
          "USB_NOT_PROVISIONED": 0 if ctx["usb_approved"] else x["usb_connects"] + x["file_copies"],
          "EXECUTABLE_TRANSFER": 0 if ctx["role"] in POL["executable_allowed_roles"] else x["exe_copies"]}
-    praw = sum(POL["rules"][k]["severity"] * np.log1p(v) for k, v in n.items())
+    praw = sum(M["learned"][k] * np.log1p(v) for k, v in n.items())  # weights learned from data (surprisal)
     pnorm = min(praw / M["p99"], 3.0)
     chains = {"CHAIN_AFTER_HOURS_EXFIL": bool((not ah_ok) and x["after_hours_logons"] > 0 and x["usb_after_hours"] > 0 and x["files_after_hours"] > 0),
               "CHAIN_FOREIGN_PC_TRANSFER": bool((not multi) and x["foreign_pc_logons"] > 0 and x["file_copies"] > 0),
               "CHAIN_FIRST_MEDIA_BURST": bool(x["first_usb"] > 0 and x["file_copies"] > 0)}
     w = POL["fusion_weights"]
-    e = w["anomaly"] * excess + w["policy"] * pnorm + w["chain"] * sum(chains.values())
+    chain_ev = sum(M["chain_w"][c] for c, hit in chains.items() if hit) / M["chain_mean"]
+    e = w["anomaly"] * excess + w["policy"] * pnorm + w["chain"] * chain_ev
     # a what-if check: start from the employee's last recorded risk every time (test runs do not pile up)
     prev = float(M["last"].loc[b.user_id, "risk"]) if b.user_id in M["last"].index else 0.0
     risk = POL["decay"] * prev + e
     audit(u.username, "LIVE_SCORE", b.user_id, json.dumps(x))
     return {"user_id": b.user_id, "anomaly_score": round(s, 4), "anomalous_day": bool(s > M["thr"]),
             "anomaly_component": round(float(excess), 3), "policy_component": round(float(pnorm), 3),
-            "chain_component": int(sum(chains.values())), "evidence": round(float(e), 3), "risk": round(float(risk), 3),
+            "chain_component": int(sum(chains.values())), "chain_evidence": round(float(chain_ev), 3), "evidence": round(float(e), 3), "risk": round(float(risk), 3),
             "alert": bool(risk >= M["alert_at"]), "alert_threshold": round(float(M["alert_at"]), 3),
             "policy_hits": {k: float(v) for k, v in n.items() if v}, "chains": [k for k, v in chains.items() if v],
             "context": {"role": str(ctx["role"]), "department": str(ctx["department"]), "assigned_pc": str(ctx["assigned_pc"]),
