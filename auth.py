@@ -28,6 +28,8 @@ if DATABASE_URL.startswith("postgres://"):  # Render/Heroku style URL
 JWT_SECRET = os.environ.get("JWT_SECRET") or secrets.token_urlsafe(48)
 TOKEN_HOURS = float(os.environ.get("TOKEN_HOURS", "8"))
 MAX_FAILS, LOCK_MINUTES = 5, 15
+# The owner is the only person who can give anyone the admin role (defaults to the bootstrap admin).
+OWNER = os.environ.get("OWNER_USERNAME") or os.environ.get("ADMIN_USERNAME") or ""
 ROLES = ("admin", "analyst", "viewer")
 RANK = {"viewer": 1, "analyst": 2, "admin": 3}
 
@@ -63,7 +65,8 @@ class User(Base):
         return {k: (getattr(self, k).isoformat(timespec="seconds") if isinstance(getattr(self, k), datetime)
                     else getattr(self, k))
                 for k in ("id", "username", "email", "full_name", "organisation", "reason", "role", "status",
-                          "must_change_password", "created_at", "approved_by", "last_login", "locked_until")}
+                          "must_change_password", "created_at", "approved_by", "last_login", "locked_until")} | {
+            "is_owner": bool(OWNER) and self.username == OWNER}
 
 
 class Audit(Base):
@@ -95,7 +98,7 @@ def password_problems(pw, username=""):
     if not re.search(r"[a-z]", pw): p.append("a lowercase letter")
     if not re.search(r"\d", pw): p.append("a number")
     if not re.search(r"[^A-Za-z0-9]", pw): p.append("a symbol")
-    if username and username.lower() in pw.lower(): p.append("must not contain the username")
+    if username and username.lower() in pw.lower(): p.append("no username inside it")
     return p
 
 

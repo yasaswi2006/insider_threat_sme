@@ -19,7 +19,7 @@ from fastapi import Depends, FastAPI, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from auth import (ROLES, Audit, Session, User, audit, check_pw, current_user, hash_pw, init_db, make_token,
+from auth import (OWNER, ROLES, Audit, Session, User, audit, check_pw, current_user, hash_pw, init_db, make_token,
                   now, password_problems, require, temp_password, MAX_FAILS, LOCK_MINUTES)
 from datetime import timedelta
 
@@ -116,7 +116,7 @@ def health():
 def signup(b: SignupIn):
     probs = password_problems(b.password, b.username)
     if probs:
-        raise HTTPException(422, "Password needs " + ", ".join(probs))
+        raise HTTPException(422, "Password must have: " + ", ".join(probs))
     with Session() as s:
         if s.scalar(select(User).where((User.username == b.username) | (User.email == b.email.lower()))):
             raise HTTPException(409, "Username or email already registered")
@@ -164,7 +164,7 @@ def change_password(b: ChangePwIn, u: User = Depends(current_user)):
         raise HTTPException(401, "Current password is incorrect")
     probs = password_problems(b.new_password, u.username)
     if probs:
-        raise HTTPException(422, "Password needs " + ", ".join(probs))
+        raise HTTPException(422, "Password must have: " + ", ".join(probs))
     if b.new_password == b.old_password:
         raise HTTPException(422, "New password must be different")
     with Session() as s:
@@ -198,6 +198,8 @@ def admin_users(a: User = Depends(require("admin"))):
 def admin_create(b: CreateUserIn, a: User = Depends(require("admin"))):
     if b.role not in ROLES:
         raise HTTPException(422, "Unknown role")
+    if b.role == "admin" and a.username != OWNER:
+        raise HTTPException(403, "Only the owner can create admin accounts")
     pw = temp_password()
     with Session() as s:
         if s.scalar(select(User).where((User.username == b.username) | (User.email == b.email.lower()))):
@@ -213,6 +215,8 @@ def admin_create(b: CreateUserIn, a: User = Depends(require("admin"))):
 def admin_patch(uid: int, b: UserPatch, a: User = Depends(require("admin"))):
     if b.role and b.role not in ROLES:
         raise HTTPException(422, "Unknown role")
+    if b.role == "admin" and a.username != OWNER:
+        raise HTTPException(403, "Only the owner can give someone the admin role")
     if b.status and b.status not in ("active", "disabled", "rejected", "pending"):
         raise HTTPException(422, "Unknown status")
     with Session() as s:
@@ -221,6 +225,8 @@ def admin_patch(uid: int, b: UserPatch, a: User = Depends(require("admin"))):
             raise HTTPException(404, "No such account")
         if u.username == a.username and ((b.role and b.role != "admin") or (b.status and b.status != "active")):
             raise HTTPException(422, "You cannot demote or disable your own admin account")
+        if u.username == OWNER and a.username != OWNER:
+            raise HTTPException(403, "The owner account can only be changed by the owner")
         changes = []
         if b.role and b.role != u.role:
             changes.append(f"role {u.role}→{b.role}"); u.role = b.role
@@ -241,6 +247,8 @@ def admin_reset(uid: int, a: User = Depends(require("admin"))):
         u = s.get(User, uid)
         if not u:
             raise HTTPException(404, "No such account")
+        if u.username == OWNER and a.username != OWNER:
+            raise HTTPException(403, "The owner account can only be changed by the owner")
         u.password_hash, u.must_change_password, u.failed_attempts, u.locked_until = hash_pw(pw), True, 0, None
         s.commit()
         target = u.username

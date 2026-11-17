@@ -206,6 +206,7 @@ if USER.get("must_change_password"):
     st.stop()
 ROLE = USER["role"]
 RANK = {"viewer": 1, "analyst": 2, "admin": 3}[ROLE]
+GRANTABLE = ["viewer", "analyst", "admin"] if USER.get("is_owner") else ["viewer", "analyst"]
 
 # ================================================================== SIDEBAR
 st.sidebar.markdown(f"""<div style="text-align:center"><div style="font-size:34px;font-weight:800;letter-spacing:5px">TERPE</div>
@@ -496,6 +497,8 @@ An analyst cannot read everyone's logs, so the question is: *if the analyst only
 # ================================================================== ADMIN
 elif page == "Admin Console":
     st.title("Admin Console")
+    if USER.get("is_owner"):
+        st.caption("You are the **owner**: only you can give someone the admin role, and nobody else can change your account.")
     t1, t2, t3, t4 = st.tabs(["Access requests", "All accounts", "Create account", "Audit log"])
     accts = pd.DataFrame(get("/admin/users"))
     with t1:
@@ -507,7 +510,7 @@ elif page == "Admin Console":
                 st.markdown(f"**{a['full_name']}** · `{a['username']}` · {a['email']}  \n"
                             f"{a['organisation'] or '—'} · requested {a['created_at']}  \n_{a['reason'] or 'No reason given'}_")
                 c1, c2, c3 = st.columns([1, 1, 1])
-                role = c1.selectbox("Role", ["viewer", "analyst", "admin"], key=f"r{a['id']}")
+                role = c1.selectbox("Role", GRANTABLE, key=f"r{a['id']}")
                 if c2.button("Approve", key=f"a{a['id']}", width="stretch", type="primary"):
                     _, err = api("PATCH", f"/admin/users/{a['id']}", json={"status": "active", "role": role})
                     st.error(err) if err else st.rerun()
@@ -520,7 +523,8 @@ elif page == "Admin Console":
         who = st.selectbox("Manage account", accts["username"])
         a = accts.set_index("username").loc[who]
         c1, c2, c3 = st.columns(3)
-        nr = c1.selectbox("Role", ["viewer", "analyst", "admin"], index=["viewer", "analyst", "admin"].index(a["role"]))
+        opts = GRANTABLE if a["role"] in GRANTABLE else GRANTABLE + [a["role"]]
+        nr = c1.selectbox("Role", opts, index=opts.index(a["role"]))
         ns = c2.selectbox("Status", ["active", "disabled", "pending", "rejected"],
                           index=["active", "disabled", "pending", "rejected"].index(a["status"]))
         if c3.button("Save changes", width="stretch"):
@@ -538,7 +542,7 @@ elif page == "Admin Console":
             c1, c2 = st.columns(2)
             un, fn = c1.text_input("Username"), c2.text_input("Full name")
             em = c1.text_input("Email")
-            rl = c2.selectbox("Role", ["analyst", "viewer", "admin"])
+            rl = c2.selectbox("Role", [r for r in ["analyst", "viewer", "admin"] if r in GRANTABLE])
             ok = st.form_submit_button("Create account")
         if ok:
             r, err = api("POST", "/admin/users", json={"username": un, "email": em, "full_name": fn, "role": rl})
