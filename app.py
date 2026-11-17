@@ -1,47 +1,15 @@
-
-import hmac
+"""TERPE v2 dashboard — streamlit run app.py   (needs API_URL in .streamlit/secrets.toml or env)."""
+import json
 import os
 
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 import requests
 import streamlit as st
 
+st.set_page_config(page_title="TERPE · Insider Threat Monitor", page_icon=":material/security:", layout="wide")
 
-# =========================================================
-# PAGE CONFIG
-# =========================================================
-
-st.set_page_config(
-    page_title="Insider Threat Monitor",
-    page_icon=":material/security:",
-    layout="wide"
-)
-
-
-
-# =========================================================
-# TERPE DESIGN SYSTEM
-# =========================================================
-
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-
-html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif;
-}
-
-.stApp {
-    background: #080B12;
-    color: #F8FAFC;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# =========================================================
-# CONFIGURATION
-# =========================================================
 
 def cfg(name, default=""):
     try:
@@ -50,1285 +18,554 @@ def cfg(name, default=""):
         return os.environ.get(name, default)
 
 
+pio.templates.default = "plotly_dark"
 API_URL = cfg("API_URL", "http://127.0.0.1:8000").rstrip("/")
-API_KEY = cfg("API_KEY")
-APP_PASSWORD = cfg("APP_PASSWORD")
-
-
-FEATURES = [
-    "logons",
-    "distinct_pcs",
-    "after_hours_logons",
-    "usb_connects",
-    "usb_after_hours",
-    "file_copies"
-]
-
-
+VERDICT_COLOR = {"VIOLATION": "#ef4444", "REVIEW": "#f59e0b", "AUTHORISED": "#22c55e"}
 LABELS = {
-    "logons": "Logons",
-    "distinct_pcs": "Different PCs used",
-    "after_hours_logons": "After-hours logons",
-    "usb_connects": "USB connections",
-    "usb_after_hours": "After-hours USB connections",
-    "file_copies": "Files copied to USB",
+    "logons": "Logons", "distinct_pcs": "Different PCs used", "after_hours_logons": "After-hours logons",
+    "usb_connects": "USB connections", "usb_after_hours": "After-hours USB connections",
+    "file_copies": "Files copied to USB", "foreign_pc_logons": "Logons on someone else's PC",
+    "exe_copies": "Executables copied", "distinct_file_types": "Different file types",
+    "files_after_hours": "Files copied after hours", "first_usb": "First-ever USB use",
+    "first_after_hours": "First-ever after-hours logon", "first_foreign_pc": "First-ever foreign-PC logon",
+}
+RULE_TEXT = {
+    "FOREIGN_PC": "PC this employee is not approved to use", "USB_NOT_PROVISIONED": "Employee not approved for USB",
+    "EXECUTABLE_TRANSFER": "New executable moved by non-IT role", "AFTER_HOURS": "After hours, not approved for after-hours work",
+    "NEW_FILE_TYPE": "File type never handled before",
 }
 
-
-# =========================================================
-# LOGIN
-# =========================================================
-def login():
-
-    if st.session_state.get("authed"):
-        return True
-
-    # =========================================================
-    # TERPE LOGIN PAGE — PREMIUM + FUNCTIONAL
-    # =========================================================
-
-    st.markdown("""
-    <style>
-
-    /* ================= PAGE ================= */
-
-    .stApp {
-        background:
-            radial-gradient(
-                circle at 8% 20%,
-                rgba(67, 56, 202, 0.20),
-                transparent 30%
-            ),
-            radial-gradient(
-                circle at 90% 80%,
-                rgba(14, 165, 233, 0.12),
-                transparent 30%
-            ),
-            #030712;
-    }
-
-    .block-container {
-        max-width: 1180px;
-        padding-top: 3.2rem;
-        padding-bottom: 2rem;
-    }
-
-
-    /* ================= LEFT BRAND ================= */
-
-    .terpe-title {
-        font-size: 62px;
-        font-weight: 800;
-        letter-spacing: 8px;
-        line-height: 1;
-        color: #ffffff;
-        margin-bottom: 12px;
-    }
-
-    .terpe-subtitle {
-        font-size: 19px;
-        color: #b9c7dc;
-        margin-bottom: 10px;
-    }
-
-    .terpe-description {
-        max-width: 500px;
-        font-size: 14px;
-        line-height: 1.75;
-        color: #8290a8;
-    }
-
-
-    /* ================= SECURITY CORE ================= */
-
-    .shield-wrapper {
-        height: 275px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin: 5px 0;
-    }
-
-    .shield {
-        width: 205px;
-        height: 205px;
-
-        display: flex;
-        align-items: center;
-        justify-content: center;
-
-        border-radius: 50%;
-
-        font-size: 88px;
-
-        background:
-            radial-gradient(
-                circle,
-                rgba(59,130,246,0.30),
-                rgba(79,70,229,0.12) 48%,
-                rgba(3,7,18,0.15) 72%,
-                transparent 74%
-            );
-
-        border: 1px solid rgba(96,165,250,0.35);
-
-        box-shadow:
-            0 0 28px rgba(59,130,246,0.30),
-            0 0 65px rgba(79,70,229,0.16),
-            inset 0 0 40px rgba(59,130,246,0.12);
-
-        position: relative;
-    }
-
-    .shield::before {
-        content: "";
-        position: absolute;
-        width: 238px;
-        height: 238px;
-        border-radius: 50%;
-        border: 1px solid rgba(56,189,248,0.10);
-    }
-
-    .shield::after {
-        content: "";
-        position: absolute;
-        width: 275px;
-        height: 275px;
-        border-radius: 50%;
-        border: 1px solid rgba(99,102,241,0.06);
-    }
-
-
-    /* ================= FEATURES ================= */
-
-    .feature {
-        padding: 7px 0;
-        color: #b7c3d7;
-        font-size: 13px;
-    }
-
-    .feature span {
-        color: #38bdf8;
-        margin-right: 9px;
-        font-weight: 700;
-    }
-
-
-    /* ================= REAL STREAMLIT LOGIN CARD ================= */
-
-    /* Streamlit's REAL bordered container */
-    div[data-testid="stVerticalBlockBorderWrapper"] {
-        background:
-            linear-gradient(
-                145deg,
-                rgba(19,30,55,0.96),
-                rgba(7,13,28,0.98)
-            );
-
-        border: 1px solid rgba(148,163,184,0.18) !important;
-
-        border-radius: 26px !important;
-
-        padding: 34px 34px 30px 34px !important;
-
-        box-shadow:
-            0 30px 75px rgba(0,0,0,0.50),
-            0 0 45px rgba(59,130,246,0.08);
-    }
-
-
-    /* ================= ACCESS TEXT ================= */
-
-    .access-title {
-        font-size: 29px;
-        font-weight: 750;
-        color: #ffffff;
-        margin-bottom: 6px;
-    }
-
-    .access-subtitle {
-        color: #8998af;
-        font-size: 14px;
-        line-height: 1.6;
-        margin-bottom: 24px;
-    }
-
-
-    /* ================= PASSWORD ================= */
-
-    div[data-testid="stTextInput"] label {
-        color: #cbd5e1 !important;
-        font-size: 13px !important;
-    }
-
-    div[data-testid="stTextInput"] input {
-        background: rgba(2,6,23,0.90) !important;
-        color: #ffffff !important;
-
-        border: 1px solid #334155 !important;
-        border-radius: 11px !important;
-
-        height: 50px !important;
-
-        font-size: 14px !important;
-    }
-
-    div[data-testid="stTextInput"] input:focus {
-        border-color: #38bdf8 !important;
-
-        box-shadow:
-            0 0 0 1px #38bdf8,
-            0 0 18px rgba(56,189,248,0.12) !important;
-    }
-
-
-    /* ================= LOGIN BUTTON ================= */
-
-    div.stButton > button {
-        width: 100%;
-        height: 50px;
-
-        margin-top: 10px;
-
-        border-radius: 11px;
-
-        background:
-            linear-gradient(
-                100deg,
-                #2563eb,
-                #4f46e5
-            );
-
-        color: #ffffff;
-
-        border: none;
-
-        font-size: 14px;
-        font-weight: 700;
-
-        box-shadow:
-            0 10px 28px rgba(37,99,235,0.22);
-
-        transition: 0.2s ease;
-    }
-
-    div.stButton > button:hover {
-        transform: translateY(-2px);
-
-        box-shadow:
-            0 14px 32px rgba(59,130,246,0.30);
-    }
-
-
-    /* ================= SECURITY FOOTER ================= */
-
-    .security-note {
-        text-align: center;
-        color: #59677d;
-        font-size: 11px;
-        margin-top: 18px;
-    }
-
-    </style>
-    """, unsafe_allow_html=True)
-
-
-    # =========================================================
-    # SECURITY CHECKS
-    # =========================================================
-
-    if not APP_PASSWORD:
-        st.error("APP_PASSWORD is not configured.")
-        return False
-
-    if st.session_state.get("attempts", 0) >= 5:
-        st.error(
-            "Too many failed attempts. Refresh the page to try again."
-        )
-        return False
-
-
-    # =========================================================
-    # TWO-COLUMN LOGIN LAYOUT
-    # =========================================================
-
-    left, right = st.columns(
-        [1.15, 0.85],
-        gap="large"
-    )
-
-
-    # =========================================================
-    # LEFT SIDE
-    # =========================================================
-
-    with left:
-
-        st.markdown(
-            '<div class="terpe-title">TERPE</div>',
-            unsafe_allow_html=True
-        )
-
-        st.markdown(
-            '<div class="terpe-subtitle">'
-            'Threat Exposure & Risk Profiling Engine'
-            '</div>',
-            unsafe_allow_html=True
-        )
-
-        st.markdown(
-            '<div class="terpe-description">'
-            '<b style="color:#cbd5e1;">'
-            'Behavioral Security Intelligence for SMEs'
-            '</b>'
-            '<br><br>'
-            'Monitor anomalous employee behavior, track accumulated '
-            'risk over time, and investigate potential insider-threat '
-            'signals through explainable security analytics.'
-            '</div>',
-            unsafe_allow_html=True
-        )
-
-        st.markdown(
-            '''
-            <div class="shield-wrapper">
-                <div class="shield">🛡</div>
-            </div>
-            ''',
-            unsafe_allow_html=True
-        )
-
-        st.markdown(
-            '''
-            <div class="feature">
-                <span>◆</span>
-                Behavioral anomaly detection
-            </div>
-
-            <div class="feature">
-                <span>◆</span>
-                Stateful risk profiling
-            </div>
-
-            <div class="feature">
-                <span>◆</span>
-                Explainable security intelligence
-            </div>
-
-            <div class="feature">
-                <span>◆</span>
-                SME-focused threat monitoring
-            </div>
-            ''',
-            unsafe_allow_html=True
-        )
-
-
-    # =========================================================
-    # RIGHT SIDE — REAL FUNCTIONAL LOGIN CARD
-    # =========================================================
-
-    with right:
-
-        with st.container(border=True):
-
-            st.markdown(
-                '<div class="access-title">Secure Access</div>',
-                unsafe_allow_html=True
-            )
-
-            st.markdown(
-                '<div class="access-subtitle">'
-                'Sign in to your TERPE security dashboard.'
-                '</div>',
-                unsafe_allow_html=True
-            )
-
-            pw = st.text_input(
-                "Dashboard password",
-                type="password",
-                placeholder="Enter your password"
-            )
-
-            if st.button(
-                "Log in to TERPE",
-                use_container_width=True
-            ):
-
-                if hmac.compare_digest(
-                    pw.encode(),
-                    APP_PASSWORD.encode()
-                ):
-
-                    st.session_state["authed"] = True
-                    st.rerun()
-
-                else:
-
-                    st.session_state["attempts"] = (
-                        st.session_state.get("attempts", 0) + 1
-                    )
-
-                    st.error("Incorrect password.")
-
-            st.markdown(
-                '<div class="security-note">'
-                '🔒 Protected TERPE security environment'
-                '</div>',
-                unsafe_allow_html=True
-            )
-
-
-    return False
-
-
-if not login():
-    st.stop()
-# =========================================================
-# API FUNCTIONS
-# =========================================================
-
-def call(method, path, **kwargs):
-
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+.stApp { background: #080B12; color: #F8FAFC; }
+.pill {display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;margin:2px 4px 2px 0}
+.card {background:#111827;border:1px solid #1f2937;border-radius:12px;padding:10px 14px}
+.card .k {color:#94a3b8;font-size:12px} .card .v {color:#f8fafc;font-size:18px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.reason {padding:8px 12px;border-left:3px solid #38bdf8;background:rgba(56,189,248,.06);margin:6px 0;border-radius:6px}
+.reason.policy {border-color:#f59e0b;background:rgba(245,158,11,.07)}
+.reason.chain {border-color:#ef4444;background:rgba(239,68,68,.08)}
+</style>""", unsafe_allow_html=True)
+
+
+# ================================================================== API helpers
+def api(method, path, **kw):
+    headers = {}
+    if st.session_state.get("token"):
+        headers["Authorization"] = "Bearer " + st.session_state["token"]
     try:
-
-        response = requests.request(
-            method,
-            API_URL + path,
-            headers={"X-API-Key": API_KEY},
-            timeout=60,
-            **kwargs
-        )
-
+        r = requests.request(method, API_URL + path, headers=headers, timeout=60, **kw)
     except requests.RequestException:
-
-        return None, (
-            "Cannot reach the API. "
-            "Make sure FastAPI is running on port 8000."
-        )
-
-    if response.status_code != 200:
-
+        return None, "Cannot reach the TERPE API. Check that the backend is running."
+    if r.status_code == 401 and st.session_state.get("token"):
+        st.session_state.clear()
+        st.warning("Your session has ended. Please sign in again.")
+        st.rerun()
+    if r.status_code >= 400:
         try:
-            detail = response.json().get("detail", "")
+            det = r.json().get("detail", "")
+            if isinstance(det, list):
+                det = "; ".join(f"{'.'.join(map(str, d.get('loc', [])[1:]))}: {d.get('msg')}" for d in det)
         except ValueError:
-            detail = ""
-
-        return None, f"API error {response.status_code}: {detail}"
-
-    return response.json(), None
+            det = r.text[:200]
+        return None, det or f"Error {r.status_code}"
+    return r.json(), None
 
 
-def fetch(path, params=None):
-
-    data, error = call(
-        "GET",
-        path,
-        params=params
-    )
-
-    if error:
-        raise RuntimeError(error)
-
+def get(path, **params):
+    data, err = api("GET", path, params=params or None)
+    if err:
+        st.error(err)
+        st.stop()
     return data
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_top(n):
-
-    return fetch(
-        "/users/top",
-        {"n": n}
-    )
+def cached(path, token, **params):
+    return get(path, **params)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def get_timeline(user_id):
-
-    return fetch(
-        f"/users/{user_id}/timeline"
-    )
+def cget(path, **params):
+    return cached(path, st.session_state.get("token"), **params)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def get_explain(user_id, day):
-
-    return fetch(
-        f"/users/{user_id}/explain",
-        {"day": day}
-    )
+def pills(rules):
+    if not rules:
+        return ""
+    return "".join(f'<span class="pill" style="background:#334155">{RULE_TEXT.get(r, r)}</span>'
+                   for r in rules.split("|") if r)
 
 
-def safe(function, *args):
+def verdict_table(df, extra_cols=()):
+    if df.empty:
+        st.info("No events.")
+        return
+    d = df.copy()
+    d["Why"] = d["rules"].fillna("").apply(lambda s: " · ".join(RULE_TEXT.get(r, r) for r in s.split("|") if r) or "Within policy")
+    cols = [c for c in ["ts", "event", "activity", "filename", "ext", "pc", "verdict", "Why", *extra_cols] if c in d.columns]
+    d = d[cols].rename(columns={"ts": "Time", "event": "Event", "activity": "Activity", "filename": "File",
+                                "ext": "Type", "pc": "PC", "verdict": "Verdict"})
+    st.dataframe(d.style.map(lambda v: f"color:{VERDICT_COLOR.get(v, '')};font-weight:700", subset=["Verdict"]),
+                 hide_index=True, width="stretch")
 
-    try:
-        return function(*args)
 
-    except Exception as e:
+# ================================================================== LOGIN / SIGN-UP
+def auth_screen():
+    st.markdown("""
+    <style>
+    .stApp {background: radial-gradient(circle at 8% 20%, rgba(67,56,202,.20), transparent 30%),
+            radial-gradient(circle at 90% 80%, rgba(14,165,233,.12), transparent 30%), #030712;}
+    .block-container {max-width:1180px;padding-top:3rem}
+    .terpe-title {font-size:62px;font-weight:800;letter-spacing:8px;line-height:1;color:#fff;margin-bottom:12px}
+    .terpe-subtitle {font-size:19px;color:#b9c7dc;margin-bottom:10px}
+    .terpe-description {max-width:500px;font-size:14px;line-height:1.75;color:#8290a8}
+    .feature {padding:7px 0;color:#b7c3d7;font-size:13px}
+    .feature span {color:#38bdf8;margin-right:9px;font-weight:700}
+    div[data-testid="stVerticalBlockBorderWrapper"] {background:linear-gradient(145deg,rgba(19,30,55,.96),rgba(7,13,28,.98));
+        border:1px solid rgba(148,163,184,.18)!important;border-radius:22px!important;padding:26px!important;
+        box-shadow:0 30px 75px rgba(0,0,0,.5)}
+    div.stButton > button, div.stFormSubmitButton > button {width:100%;height:46px;border-radius:11px;border:none;
+        background:linear-gradient(100deg,#2563eb,#4f46e5);color:#fff;font-weight:700}
+    </style>""", unsafe_allow_html=True)
+    left, right = st.columns([1.1, 0.9], gap="large")
+    with left:
+        st.markdown('<div class="terpe-title">TERPE</div><div class="terpe-subtitle">Threat Exposure & Risk Profiling Engine</div>'
+                    '<div class="terpe-description"><b style="color:#cbd5e1">Policy-grounded insider-threat intelligence for SMEs</b><br><br>'
+                    'Fuses behavioural anomaly detection with access-policy verdicts and exfiltration-chain detection, '
+                    'so every alert comes with the exact files, PCs and rules behind it.</div><br>', unsafe_allow_html=True)
+        for f in ["File-level access authorisation", "Self + peer behavioural baselines",
+                  "Exfiltration-chain detection", "Role-based access with full audit trail"]:
+            st.markdown(f'<div class="feature"><span>◆</span>{f}</div>', unsafe_allow_html=True)
+    with right:
+        with st.container(border=True):
+            t_in, t_up = st.tabs(["Sign in", "Request access"])
+            with t_in:
+                with st.form("login"):
+                    u = st.text_input("Username")
+                    p = st.text_input("Password", type="password")
+                    ok = st.form_submit_button("Sign in to TERPE")
+                if ok:
+                    data, err = api("POST", "/auth/login", json={"username": u.strip(), "password": p})
+                    if err:
+                        st.error(err)
+                    else:
+                        st.session_state.update(token=data["token"], user=data["user"])
+                        st.rerun()
+            with t_up:
+                st.caption("New accounts are reviewed by an administrator, who assigns your role.")
+                with st.form("signup", clear_on_submit=False):
+                    c1, c2 = st.columns(2)
+                    full = c1.text_input("Full name")
+                    uname = c2.text_input("Username", help="3–40 letters, numbers, . or _")
+                    email = st.text_input("Work email")
+                    org = st.text_input("Organisation / team")
+                    reason = st.text_area("Why do you need access?", height=70)
+                    p1 = st.text_input("Password", type="password",
+                                       help="10+ characters with upper & lower case, a number and a symbol")
+                    p2 = st.text_input("Confirm password", type="password")
+                    go_ = st.form_submit_button("Request access")
+                if go_:
+                    if p1 != p2:
+                        st.error("Passwords do not match.")
+                    else:
+                        data, err = api("POST", "/auth/signup", json=dict(username=uname.strip(), email=email.strip(),
+                                        full_name=full.strip(), organisation=org, reason=reason, password=p1))
+                        st.error(err) if err else st.success(data["message"])
+            st.markdown('<div style="text-align:center;color:#59677d;font-size:11px;margin-top:12px">'
+                        '🔒 Every sign-in and investigation is recorded in the audit log</div>', unsafe_allow_html=True)
 
-        st.error(str(e))
-        st.stop()
+
+def force_password_change():
+    st.title("Set a new password")
+    st.info("You signed in with a temporary password. Choose your own password to continue.")
+    with st.form("chg"):
+        old = st.text_input("Temporary password", type="password")
+        n1 = st.text_input("New password", type="password")
+        n2 = st.text_input("Confirm new password", type="password")
+        ok = st.form_submit_button("Save password")
+    if ok:
+        if n1 != n2:
+            st.error("Passwords do not match.")
+        else:
+            _, err = api("POST", "/auth/change-password", json={"old_password": old, "new_password": n1})
+            if err:
+                st.error(err)
+            else:
+                st.session_state["user"]["must_change_password"] = False
+                st.success("Password updated.")
+                st.rerun()
 
 
-# =========================================================
-# SIDEBAR
-# =========================================================
+if not st.session_state.get("token"):
+    auth_screen()
+    st.stop()
+USER = st.session_state["user"]
+if USER.get("must_change_password"):
+    force_password_change()
+    st.stop()
+ROLE = USER["role"]
+RANK = {"viewer": 1, "analyst": 2, "admin": 3}[ROLE]
 
-st.sidebar.markdown(
-    """
-    <div style="text-align:center;">
-        <div style="font-size:42px;">TERPE</div>
-        <h2>Insider Threat Monitor</h2>
-        <p>SME Security Analytics</p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
+# ================================================================== SIDEBAR
+st.sidebar.markdown(f"""<div style="text-align:center"><div style="font-size:34px;font-weight:800;letter-spacing:5px">TERPE</div>
+<div style="color:#94a3b8;font-size:13px">Insider Threat Monitor · v2</div></div>""", unsafe_allow_html=True)
 st.sidebar.divider()
-
-page = st.sidebar.radio(
-    "Navigation",
-    [
-        "Overview",
-        "Investigate User",
-        "Live Scoring"
-    ]
-)
-
+pages = ["Overview"]
+if RANK >= 2:
+    pages += ["Investigate Employee", "File Access Monitor", "Live Scoring"]
+pages += ["Methodology & Evaluation"]
+if RANK >= 3:
+    pages += ["Admin Console"]
+pages += ["My Account"]
+page = st.sidebar.radio("Navigation", pages)
 st.sidebar.divider()
-
-show_gt = st.sidebar.checkbox(
-    "Evaluation mode",
-    value=True
-)
-
-if show_gt:
-
-    st.sidebar.info(
-        "Ground truth is available because this "
-        "demonstration uses the CERT r4.2 research dataset."
-    )
-
-else:
-
-    st.sidebar.caption(
-        "Evaluation mode is disabled. "
-        "This view represents a real deployment."
-    )
-
-if st.sidebar.button(
-    "Log out",
-    use_container_width=True
-):
-
+show_gt = st.sidebar.toggle("Evaluation mode (show CERT ground truth)", value=False)
+st.sidebar.caption(f"Signed in as **{USER['full_name']}**  \n`{USER['username']}` · {ROLE.title()}")
+if st.sidebar.button("Log out", width="stretch"):
     st.session_state.clear()
+    st.cache_data.clear()
     st.rerun()
 
 
-# =========================================================
-# OVERVIEW
-# =========================================================
-
+# ================================================================== OVERVIEW
 if page == "Overview":
-
     st.title("Insider Threat Monitor")
-
-    st.caption(
-        "Behavioral anomaly detection and accumulated risk monitoring "
-        "for SME environments."
-    )
-
+    st.caption("Organisation-wide view of behavioural risk, access-policy violations and alerts.")
+    ov = cget("/overview")
+    top = pd.DataFrame(cget("/users/top", n=1000))
+    c = st.columns(4)
+    c[0].metric("Employees monitored", ov["employees"])
+    c[1].metric("Employees with alerts", ov["alerting_employees"])
+    c[2].metric("File transfers in violation", f"{ov['file_verdicts'].get('VIOLATION', 0):,}")
+    c[3].metric("Ground-truth insiders" if show_gt else "Files needing review",
+                int(top["ground_truth_insider"].sum()) if show_gt else f"{ov['file_verdicts'].get('REVIEW', 0):,}")
+    st.caption("**Employees with alerts**: accumulated risk crossed the alert line at least once. "
+               "**Violation**: a file transfer that broke the access policy. **Review**: allowed but unusual for that employee.")
     st.divider()
-
-    # -----------------------------------------------------
-    # USER DISPLAY CONTROL
-    # -----------------------------------------------------
-
-    n = st.slider(
-        "Number of users to display",
-        min_value=5,
-        max_value=1000,
-        value=100,
-        step=5
-    )
-
-    # The slider defines the selected population for ALL Overview KPIs.
-    # /users/top returns the highest-risk N users, ordered by peak risk.
-    top = pd.DataFrame(
-        safe(get_top, n)
-    )
-
-    # Safety check: never silently calculate KPIs from a different
-    # population than the number selected by the user.
-    if len(top) != n:
-        st.error(
-            f"TERPE requested {n} users but the API returned {len(top)} users. "
-            "The Overview cannot safely calculate its KPIs."
-        )
-        st.stop()
-
-    # -----------------------------------------------------
-    # KPI CALCULATIONS — SELECTED POPULATION ONLY
-    # -----------------------------------------------------
-
-    total_users = len(top)
-
-    peak_risk_values = pd.to_numeric(
-        top["peak_risk"],
-        errors="coerce"
-    ).fillna(0.0)
-
-    anomaly_day_values = pd.to_numeric(
-        top["anomaly_days"],
-        errors="coerce"
-    ).fillna(0)
-
-    high_risk = int(
-        (peak_risk_values >= 0.15524637949938055).sum()
-    )
-
-    high_risk_rate = (
-        (high_risk / total_users) * 100
-        if total_users > 0
-        else 0.0
-    )
-
-    # Sum of anomalous user-days for ONLY the users selected by the slider.
-    alert_days = int(
-        anomaly_day_values.sum()
-    )
-
-    if "ground_truth_insider" in top.columns:
-
-        ground_truth_values = pd.to_numeric(
-            top["ground_truth_insider"],
-            errors="coerce"
-        ).fillna(0)
-
-        # Count labelled insiders among ONLY the selected users.
-        insiders = int(
-            (ground_truth_values > 0).sum()
-        )
-
-    else:
-
-        insiders = 0
-
-    # -----------------------------------------------------
-    # KPI CARDS
-    # -----------------------------------------------------
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric(
-        "Users displayed",
-        total_users
-    )
-
-    c2.metric(
-        "High-risk rate",
-        f"{high_risk_rate:.1f}%",
-        delta=f"{high_risk} high-risk users"
-    )
-
-    c3.metric(
-        "Anomalous days",
-        alert_days
-    )
-
-    if show_gt:
-
-        c4.metric(
-            "Ground-truth insiders",
-            insiders
-        )
-
-    else:
-
-        c4.metric(
-            "Monitoring status",
-            "Active"
-        )
-
-    st.divider()
-
-    # -----------------------------------------------------
-    # RISK CHARTS
-    # -----------------------------------------------------
-
-    left, right = st.columns(
-        [1.5, 1]
-    )
-
-    with left:
-
-        st.subheader("Top-risk users")
-
-        chart_data = top.sort_values(
-            "peak_risk",
-            ascending=True
-        )
-
-        fig = go.Figure()
-
-        fig.add_trace(
-            go.Bar(
-                x=chart_data["peak_risk"],
-                y=chart_data["user"],
-                orientation="h",
-                name="Peak risk"
-            )
-        )
-
-        fig.update_layout(
-            height=480,
-            margin=dict(
-                l=10,
-                r=10,
-                t=20,
-                b=20
-            ),
-            xaxis_title="Peak risk",
-            yaxis_title="User",
-            showlegend=False
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
-
-    with right:
-
-        st.subheader("Risk distribution")
-
-        low = int(
-            (
-                top["peak_risk"]
-                < 0.05
-            ).sum()
-        )
-
-        medium = int(
-            (
-                (top["peak_risk"] >= 0.05)
-                &
-                (
-                    top["peak_risk"]
-                    < 0.15524637949938055
-                )
-            ).sum()
-        )
-
-        high = int(
-            (
-                top["peak_risk"]
-                >= 0.15524637949938055
-            ).sum()
-        )
-
-        distribution = pd.DataFrame(
-            {
-                "Level": [
-                    "Low",
-                    "Medium",
-                    "High"
-                ],
-                "Users": [
-                    low,
-                    medium,
-                    high
-                ]
-            }
-        )
-
-        fig2 = go.Figure(
-            data=[
-                go.Pie(
-                    labels=distribution["Level"],
-                    values=distribution["Users"],
-                    hole=0.45
-                )
-            ]
-        )
-
-        fig2.update_layout(
-            height=480,
-            margin=dict(
-                l=10,
-                r=10,
-                t=20,
-                b=20
-            )
-        )
-
-        st.plotly_chart(
-            fig2,
-            use_container_width=True
-        )
-
-    # =====================================================
-    # TERPE EVALUATION & RISK PROFILING
-    # =====================================================
-
-    st.divider()
-
-    st.subheader(
-        "TERPE Evaluation & Risk Profiling"
-    )
-
-    st.write(
-        "TERPE extends basic anomaly detection by combining "
-        "Isolation Forest anomaly scores with stateful risk "
-        "profiling. Instead of treating every unusual day as "
-        "an independent alert, the system tracks accumulated "
-        "risk over time."
-    )
-
-    # -----------------------------------------------------
-    # TERPE MODEL PIPELINE
-    # -----------------------------------------------------
-
-    st.markdown(
-        "### From anomaly detection to risk profiling"
-    )
-
-    evaluation_data = pd.DataFrame(
-        {
-            "TERPE layer": [
-                "Isolation Forest",
-                "Stateful Risk Engine",
-                "Behavioral Explanation"
-            ],
-            "What it does": [
-                "Identifies unusual daily employee behaviour",
-                "Accumulates and decays risk across time",
-                "Highlights behaviours that deviate from the user's baseline"
-            ]
-        }
-    )
-
-    st.dataframe(
-        evaluation_data,
-        hide_index=True,
-        use_container_width=True
-    )
-
-    # -----------------------------------------------------
-    # RISK LEADERBOARD
-    # -----------------------------------------------------
-
+    l, r = st.columns([1.5, 1])
+    with l:
+        st.subheader("Highest-risk employees")
+        n = st.slider("Employees shown", 5, 50, 20)
+        d = top.head(n).sort_values("peak_risk")
+        colors = ["#ef4444" if (show_gt and g) else "#3b82f6" for g in d["ground_truth_insider"]]
+        fig = go.Figure(go.Bar(x=d["peak_risk"], y=d["user"], orientation="h", marker_color=colors))
+        fig.update_layout(height=max(380, n * 18), margin=dict(l=10, r=10, t=10, b=10), xaxis_title="Peak accumulated risk")
+        st.plotly_chart(fig, width="stretch")
+        if show_gt:
+            st.caption("Red = labelled insider in CERT r4.2.")
+    with r:
+        st.subheader("File transfers by verdict")
+        fv = ov["file_verdicts"]
+        fig = go.Figure(go.Pie(labels=list(fv), values=list(fv.values()), hole=.5,
+                               marker_colors=[VERDICT_COLOR.get(k) for k in fv]))
+        fig.update_layout(height=260, margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig, width="stretch")
+        st.subheader("Policy rule hits")
+        rh = pd.Series(ov["rule_hits"]).sort_values()
+        fig = go.Figure(go.Bar(x=rh.values, y=[RULE_TEXT.get(k, k) for k in rh.index], orientation="h", marker_color="#f59e0b"))
+        fig.update_layout(height=230, margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig, width="stretch")
+    st.subheader("Alerts and policy violations per week")
+    w = pd.DataFrame(ov["weekly"])
+    fig = go.Figure([go.Scatter(x=w["week"], y=w["alerts"], name="Alert user-days", line_color="#ef4444"),
+                     go.Scatter(x=w["week"], y=w["violations"], name="User-days with violations", line_color="#f59e0b")])
+    fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10))
+    st.plotly_chart(fig, width="stretch")
     st.subheader("Risk leaderboard")
-
-    view = top.rename(
-        columns={
-            "user": "User",
-            "peak_score": "Peak anomaly score",
-            "anomaly_days": "Anomalous user-days",
-            "peak_risk": "Peak risk",
-            "ground_truth_insider":
-                "Ground-truth insider"
-        }
-    )
-
-    if not show_gt and "Ground-truth insider" in view.columns:
-
-        view = view.drop(
-            columns=["Ground-truth insider"]
-        )
-
-    st.dataframe(
-        view,
-        hide_index=True,
-        use_container_width=True
-    )
+    view = top.rename(columns={"user": "Employee", "role": "Role", "department": "Department", "peak_risk": "Peak risk",
+                               "alert_days": "Alert days", "violations": "Days with violations",
+                               "chain_days": "Days with exfil. chains", "anomaly_days": "Anomalous days",
+                               "ground_truth_insider": "Ground-truth insider", "scenario": "CERT scenario"})
+    view = view.drop(columns=["peak_score"] + ([] if show_gt else ["Ground-truth insider", "CERT scenario"]))
+    st.dataframe(view, hide_index=True, width="stretch")
 
 
-# =========================================================
-# INVESTIGATE USER
-# =========================================================
+# ================================================================== INVESTIGATE
+elif page == "Investigate Employee":
+    st.title("Investigate an Employee")
+    top = pd.DataFrame(cget("/users/top", n=1000))
+    uid = st.selectbox("Employee (sorted by risk)", top["user"],
+                       format_func=lambda u: f"{u} · {top.set_index('user').loc[u, 'role']}")
+    prof = cget(f"/users/{uid}/profile")
+    tl = pd.DataFrame(cget(f"/users/{uid}/timeline"))
+    tl["day"] = pd.to_datetime(tl["day"])
+    c = st.columns(6)
+    for col, (k, v) in zip(c, [("Role", prof["role"]), ("Department", prof["department"]),
+                               ("Assigned PC", prof["assigned_pc"]), ("USB / after-hours", f"{'Yes' if prof['usb_approved'] else 'No'} / {'Yes' if prof.get('after_hours_approved') else 'No'}"),
+                               ("Peak risk", f"{prof['peak_risk']:.2f}"), ("Alert days", prof["alert_days"])]):
+        col.markdown(f'<div class="card" title="{v}"><div class="k">{k}</div><div class="v">{v}</div></div>', unsafe_allow_html=True)
+    st.write("")
+    if show_gt and prof["ground_truth_insider"]:
+        st.error(f"Evaluation mode: CERT labels this employee as an insider (scenario {prof['scenario']}).")
 
-elif page == "Investigate User":
+    with st.expander("How to read this page"):
+        st.markdown("""
+- **Grey bars (daily evidence)**: how suspicious each single day was = ML anomaly + policy violations + attack chains.
+- **Blue line (accumulated risk)**: evidence adds up over days and fades by 20% per day when nothing happens, so one odd day fades away while repeated suspicious days build up.
+- **Red dots (alerts)**: days when the accumulated risk crossed the alert line (set so only the top 1% of all employee-days alert).
+- **Verdicts on each file / logon / USB event**: *Authorised* = within the employee's approved context; *Review* = unusual but allowed
+  (e.g. new file type); *Violation* = breaks the access policy (e.g. USB used by someone not approved for USB).
+""")
+    t1, t2 = st.tabs(["Risk timeline & daily evidence", "All file transfers"])
+    with t1:
+        fig = go.Figure()
+        fig.add_bar(x=tl["day"], y=tl["evidence"], name="Daily evidence", marker_color="#64748b", opacity=.6)
+        fig.add_scatter(x=tl["day"], y=tl["risk"], name="Accumulated risk", line_color="#38bdf8")
+        al = tl[tl["alert"]]
+        fig.add_scatter(x=al["day"], y=al["risk"], mode="markers", name="Alert", marker=dict(color="#ef4444", size=8))
+        if show_gt:
+            m = tl[tl["label"] == 1]
+            fig.add_scatter(x=m["day"], y=m["risk"], mode="markers", name="Malicious (ground truth)",
+                            marker=dict(symbol="x", color="#fbbf24", size=9))
+        fig.update_layout(height=360, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h"))
+        st.plotly_chart(fig, width="stretch")
 
-    st.title("Investigate a User")
-
-    st.caption(
-        "Review an employee's behavioral history, anomaly scores, "
-        "accumulated risk and the main factors associated with unusual activity."
-    )
-
-    users = safe(
-        get_top,
-        100
-    )
-
-    ids = [
-        u["user"]
-        for u in users
-    ]
-
-    uid = st.selectbox(
-        "Select employee",
-        ids
-    )
-
-    tl = pd.DataFrame(
-        safe(
-            get_timeline,
-            uid
-        )
-    )
-
-    tl["day"] = pd.to_datetime(
-        tl["day"]
-    )
-
-    # -----------------------------------------------------
-    # USER METRICS
-    # -----------------------------------------------------
-
-    c1, c2, c3 = st.columns(3)
-
-    c1.metric(
-        "Days monitored",
-        len(tl)
-    )
-
-    c2.metric(
-        "Alert days",
-        int(tl["alert"].sum())
-    )
-
-    c3.metric(
-        "Peak risk",
-        f"{tl['risk'].max():.3f}"
-    )
-
-    st.divider()
-
-
-    # -----------------------------------------------------
-    # ANOMALY TIMELINE
-    # -----------------------------------------------------
-
-    st.subheader(
-        "Behavioral anomaly timeline"
-    )
-
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Scatter(
-            x=tl["day"],
-            y=tl["anomaly_score"],
-            mode="lines",
-            name="Anomaly score"
-        )
-    )
-
-    alerts = tl[
-        tl["alert"]
-    ]
-
-    fig.add_trace(
-        go.Scatter(
-            x=alerts["day"],
-            y=alerts["anomaly_score"],
-            mode="markers",
-            name="Alert"
-        )
-    )
-
-    if show_gt:
-
-        malicious = tl[
-            tl["label"] == 1
-        ]
-
-        fig.add_trace(
-            go.Scatter(
-                x=malicious["day"],
-                y=malicious["anomaly_score"],
-                mode="markers",
-                name="Ground truth"
-            )
-        )
-
-    fig.update_layout(
-        height=400,
-        xaxis_title="Date",
-        yaxis_title="Anomaly score",
-        margin=dict(
-            t=20,
-            b=20
-        )
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-
-    # -----------------------------------------------------
-    # RISK TIMELINE
-    # -----------------------------------------------------
-
-    st.subheader(
-        "Accumulated risk"
-    )
-
-    fig2 = go.Figure()
-
-    fig2.add_trace(
-        go.Scatter(
-            x=tl["day"],
-            y=tl["risk"],
-            mode="lines",
-            name="Risk"
-        )
-    )
-
-    fig2.update_layout(
-        height=320,
-        xaxis_title="Date",
-        yaxis_title="Risk score",
-        margin=dict(
-            t=20,
-            b=20
-        )
-    )
-
-    st.plotly_chart(
-        fig2,
-        use_container_width=True
-    )
-
-
-    # -----------------------------------------------------
-    # EXPLANATION
-    # -----------------------------------------------------
-
-    st.divider()
-
-    st.subheader(
-        "Why was this user flagged?"
-    )
-
-    top_days = (
-        tl.nlargest(
-            10,
-            "anomaly_score"
-        )["day"]
-        .dt.strftime("%Y-%m-%d")
-        .tolist()
-    )
-
-    day = st.selectbox(
-        "Select one of the user's most unusual days",
-        top_days
-    )
-
-    explanation = safe(
-        get_explain,
-        uid,
-        day
-    )
-
-    st.write(
-        f"Behavioral deviations for **{uid}** on **{day}**:"
-    )
-
-    for reason in explanation["reasons"]:
-
-        feature = LABELS.get(
-            reason["feature"],
-            reason["feature"]
-        )
-
-        z = reason["z_score"]
-
-        if z >= 2:
-
-            icon = "🔴"
-
-        elif z >= 1:
-
-            icon = "🟠"
-
+        st.subheader("Why was this employee flagged on a given day?")
+        cand = tl.sort_values("evidence", ascending=False)
+        cand = cand[cand["evidence"] > 0].head(30)
+        if cand.empty:
+            st.info("No day with risk evidence for this employee.")
         else:
+            day = st.selectbox("Day (strongest evidence first)", cand["day"].dt.strftime("%Y-%m-%d"),
+                               format_func=lambda d: f"{d}  ·  evidence {cand.set_index(cand['day'].dt.strftime('%Y-%m-%d')).loc[d, 'evidence']:.2f}")
+            dd = cget(f"/users/{uid}/day/{day}")
+            s = dd["scores"]
+            k = st.columns(5)
+            k[0].metric("Anomaly (ML)", f"{s['anomaly_excess']:.2f}")
+            k[1].metric("Policy", f"{s['policy_norm']:.2f}")
+            k[2].metric("Chains", int(s["chain_score"]))
+            k[3].metric("Day evidence", f"{s['evidence']:.2f}")
+            k[4].metric("Risk after day", f"{s['risk']:.2f}", "ALERT" if dd["alert"] else None, delta_color="inverse")
+            for rsn in dd["reasons"]:
+                cls = "chain" if rsn.startswith("Chain") else "policy" if rsn.startswith("Policy") else ""
+                st.markdown(f'<div class="reason {cls}">{rsn}</div>', unsafe_allow_html=True)
+            st.markdown("##### Files copied to removable media that day")
+            verdict_table(pd.DataFrame(dd["files"]))
+            st.markdown("##### Logons and USB events outside the normal pattern")
+            verdict_table(pd.DataFrame(dd["access"]))
+            st.markdown("##### Behavioural deviations")
+            dv = pd.DataFrame(dd["deviations"])
+            dv["feature"] = dv["feature"].map(LABELS)
+            st.dataframe(dv.rename(columns={"feature": "Behaviour", "value": "Value", "z_self": "vs own history (σ)",
+                                            "z_peer": "vs same-role peers (σ)"}), hide_index=True, width="stretch")
+    with t2:
+        v = st.radio("Show", ["All", "VIOLATION", "REVIEW", "AUTHORISED"], horizontal=True)
+        fl = pd.DataFrame(cget(f"/users/{uid}/files", **({} if v == "All" else {"verdict": v})))
+        if not fl.empty:
+            k = st.columns(3)
+            for i, vv in enumerate(["VIOLATION", "REVIEW", "AUTHORISED"]):
+                k[i].metric(vv.title(), int((fl["verdict"] == vv).sum()))
+        verdict_table(fl)
+        st.caption("CERT r4.2 records files copied to removable media. Each transfer is checked against the access policy "
+                   "(see Methodology): assigned PC, USB approval, working hours, executable rules and the employee's usual file types.")
 
-            icon = "🟡"
 
-        st.markdown(
-            f"""
-            {icon} **{feature}**
+# ================================================================== FILE ACCESS MONITOR
+elif page == "File Access Monitor":
+    st.title("File Access Monitor")
+    st.caption("Every file transfer checked against the access policy, across the whole organisation.")
+    v = st.radio("Verdict", ["VIOLATION", "REVIEW"], horizontal=True)
+    lim = st.select_slider("Most recent", [100, 500, 1000, 5000], value=500)
+    fl = pd.DataFrame(cget("/files/feed", verdict=v, limit=lim))
+    if fl.empty:
+        st.info("Nothing to show.")
+    else:
+        rules = sorted({r for s in fl["rules"] for r in s.split("|") if r})
+        pick = st.multiselect("Filter by rule", rules, format_func=lambda r: RULE_TEXT.get(r, r))
+        if pick:
+            fl = fl[fl["rules"].apply(lambda s: any(r in s.split("|") for r in pick))]
+        c = st.columns(3)
+        c[0].metric("Transfers", len(fl))
+        c[1].metric("Employees", fl["user"].nunique())
+        c[2].metric("PCs", fl["pc"].nunique())
+        verdict_table(fl.rename(columns={"user": "Employee"}), extra_cols=("Employee",))
 
-            Value: **{reason['value']:.0f}**  
-            Deviation from personal baseline: **{z:+.1f}σ**
-            """
-        )
 
-        st.divider()
-
-    st.caption(
-        "These explanations show the largest deviations from the "
-        "user's personal baseline. They are an approximation of the "
-        "model's reasoning, not a complete explanation of the model."
-    )
-
-
-# =========================================================
-# LIVE SCORING
-# =========================================================
-
-else:
-
+# ================================================================== LIVE SCORING
+elif page == "Live Scoring":
     st.title("Live Threat Assessment")
-
-    st.caption(
-        "Enter one employee's activity for a day and evaluate "
-        "whether the behavior is unusual."
-    )
-
-    users = safe(
-        get_top,
-        100
-    )
-
-    ids = [
-        u["user"]
-        for u in users
-    ]
-
-    uid = st.selectbox(
-        "Employee",
-        ids
-    )
-
-    st.divider()
-
-    st.subheader(
-        "Daily activity"
-    )
-
-    defaults = {
-        "logons": 3,
-        "distinct_pcs": 3,
-        "after_hours_logons": 0,
-        "usb_connects": 0,
-        "usb_after_hours": 0,
-        "file_copies": 0
-    }
-
-    vals = {}
-
-    col1, col2, col3 = st.columns(3)
-
-    columns = [
-        col1,
-        col2,
-        col3
-    ]
-
-    for i, feature in enumerate(FEATURES):
-
-        with columns[i % 3]:
-
-            vals[feature] = st.number_input(
-                LABELS[feature],
-                min_value=0,
-                max_value=100000,
-                value=defaults[feature],
-                step=1
-            )
-
-
-    st.divider()
-
-    if st.button(
-        "Analyze Activity",
-        use_container_width=True
-    ):
-
-        result, error = call(
-            "POST",
-            "/score",
-            json={
-                "user_id": uid,
-                "features": {
-                    k: float(v)
-                    for k, v in vals.items()
-                }
-            }
-        )
-
-        if error:
-
-            st.error(error)
-
+    st.caption("Enter one employee's activity for a day. TERPE scores it with the ML model, the access policy and the chain detector.")
+    top = pd.DataFrame(cget("/users/top", n=1000))
+    uid = st.selectbox("Employee", top["user"])
+    defaults = dict(logons=2, distinct_pcs=1, after_hours_logons=0, usb_connects=0, usb_after_hours=0, file_copies=0,
+                    foreign_pc_logons=0, exe_copies=0, distinct_file_types=0, files_after_hours=0)
+    vals, cols = {}, st.columns(3)
+    for i, (f, dv_) in enumerate(defaults.items()):
+        vals[f] = cols[i % 3].number_input(LABELS[f], 0, 100000, dv_, 1)
+    if st.button("Analyse activity", width="stretch", type="primary"):
+        res, err = api("POST", "/score", json={"user_id": uid, "features": {k: float(v) for k, v in vals.items()}})
+        if err:
+            st.error(err)
         else:
-
-            st.subheader(
-                "Assessment"
-            )
-
-            c1, c2, c3 = st.columns(3)
-
-            c1.metric(
-                "Anomaly score",
-                f"{result['anomaly_score']:.3f}"
-            )
-
-            c2.metric(
-                "Running risk",
-                f"{result['risk']:.3f}"
-            )
-
-            c3.metric(
-                "Unusual activity",
-                "YES"
-                if result["anomalous_day"]
-                else "NO"
-            )
-
-
-            if result["alert"]:
-
-                st.error(
-                    "ALERT — accumulated risk is above the alert threshold."
-                )
-
-            elif result["anomalous_day"]:
-
-                st.warning(
-                    "Unusual activity detected, but accumulated risk "
-                    "has not reached the alert level."
-                )
-
+            c = st.columns(5)
+            c[0].metric("Anomaly score", f"{res['anomaly_score']:.3f}")
+            c[1].metric("ML component", f"{res['anomaly_component']:.2f}")
+            c[2].metric("Policy component", f"{res['policy_component']:.2f}")
+            c[3].metric("Chains", res["chain_component"])
+            c[4].metric("Accumulated risk", f"{res['risk']:.2f}", f"threshold {res['alert_threshold']:.2f}", delta_color="off")
+            if res["alert"]:
+                st.error("ALERT — accumulated risk is above the alert threshold.")
+            elif res["evidence"] > 0:
+                st.warning("Risk evidence recorded, but accumulated risk is below the alert threshold.")
             else:
+                st.success("Activity is within this employee's normal pattern and the access policy.")
+            ctx = res["context"]
+            st.caption(f"Context · {ctx['role']} in {ctx['department']} · assigned PC {ctx['assigned_pc']} · "
+                       f"USB approved: {'yes' if ctx['usb_approved'] else 'no'}")
+            for k_, n_ in res["policy_hits"].items():
+                st.markdown(f'<div class="reason policy">Policy · {RULE_TEXT.get(k_, k_)} ({int(n_)} events)</div>', unsafe_allow_html=True)
+            for ch in res["chains"]:
+                st.markdown(f'<div class="reason chain">Chain · {ch.replace("CHAIN_", "").replace("_", " ").title()}</div>', unsafe_allow_html=True)
 
-                st.success(
-                    "Activity is within the expected behavioral range."
-                )
+
+# ================================================================== METHODOLOGY
+elif page == "Methodology & Evaluation":
+    st.title("Methodology & Evaluation")
+    ev = cget("/evaluation")
+    st.markdown("""
+**TERPE v2 = behaviour anomaly (ML) + access-policy verdicts (rules) + exfiltration chains (sequences), fused into one accumulated risk.**
+
+| Layer | What it adds | Why it matters |
+|---|---|---|
+| **Causal baselines** | Each day is compared only with the employee's *past* days | v1 compared each day with the full period, including the future: impossible in a live system and optimistic in evaluation |
+| **Peer baseline** | Same-day deviation from employees in the same job role | Catches insiders who behave abnormally from day one, so their own history looks "normal" |
+| **Context features** | Foreign-PC logons, executable transfers, first-ever USB / after-hours / foreign-PC behaviour | The CERT insider scenarios are about *new* behaviour, which raw counts miss |
+| **Context-provisioned policy** | Every logon, USB and file event gets an *Authorised / Review / Violation* verdict against the employee's own approved context: approved PCs, USB approval, after-hours approval, usual file types | Gives analysts concrete, auditable evidence ("copied 14 files on a PC that isn't theirs") instead of a bare score |
+| **Exfiltration chains** | Ordered sequences such as after-hours logon → USB → file copy | Single events are ambiguous; the ordered combination is the attack pattern |
+| **Risk fusion** | `risk_t = 0.8^(days since last activity) · risk_(t-1) + anomaly + policy + chains` | Repeated weak evidence accumulates; the alert threshold is set by an analyst *alert budget* (top 1% of user-days), not by labels |
+""")
+    ab = pd.DataFrame(ev["ablation"])
+    v1 = ab[ab["layer"].str.startswith("L0")].iloc[0]
+    v2 = ab[ab["layer"].str.startswith("L5")].iloc[0]
+    ro = ab[ab["layer"].str.startswith("R")].iloc[0]
+    st.subheader("What the results say")
+    st.markdown(f"""
+The dataset has **1,000 employees, {int(v2['insiders_detected'].split('/')[1])} of whom are real insiders** (known only because CERT publishes the answer key).
+An analyst cannot read everyone's logs, so the question is: *if the analyst only looks at the employees TERPE ranks highest, how many real insiders do they find?*
+
+- **Top 10 employees:** TERPE v1 had **{int(v1['p@10']*10)}** real insiders in its top 10; TERPE v2 has **{int(v2['p@10']*10)}**.
+  Top 20: **{int(v1['p@20']*20)} → {int(v2['p@20']*20)}**. In simple terms, almost every person v2 puts at the top of the list really is an insider.
+- **Caught while the attack was happening:** v1 raised an alert during the malicious period for **{v1['insiders_detected']}** insiders; v2 does it for **{v2['insiders_detected']}**,
+  usually on the very first malicious day (median delay **{v2['median_delay_days']:.0f} days**).
+- **Cost of that:** v2 also alerts on **{int(v2['false_alert_users'])}** normal employees (out of ~930), v1 on {int(v1['false_alert_users'])}.
+  The analyst reviews more people, but finds four times as many insiders.
+- **Why combine rules and ML instead of rules alone?** The access rules on their own rank insiders just as well, but they alert on
+  **{int(ro['false_alert_users'])}** normal employees. Fusing them with the ML score and accumulating risk over days keeps the same insiders while cutting false alerts by about
+  **{(1 - v2['false_alert_users']/ro['false_alert_users'])*100:.0f}%**.
+- **The ML layers alone (L1–L3) do not improve on v1.** The causal baseline removes v1's look-ahead into future days (an unfair advantage), so its numbers drop slightly. This is
+  reported honestly: the improvement comes from *combining* behaviour, policy and attack-chain evidence, not from any single model.
+- **By insider type:** after-hours data theft (scenario 1) and the disgruntled IT admin (scenario 3) are caught almost completely. The job-hunting insider (scenario 2) is mostly missed,
+  because those employees were already approved USB users and their main warning sign is web browsing, which this version does not use yet (future work).
+""")
+    with st.expander("What do the column names mean?"):
+        st.markdown("""
+- **User AUC**: probability that a randomly chosen insider is ranked above a randomly chosen normal employee (0.5 = random, 1 = perfect).
+- **User AP (average precision)**: how concentrated the insiders are at the top of the ranking; more sensitive than AUC when insiders are rare (7%).
+- **Precision@k**: share of real insiders among the top *k* employees: what an analyst who reviews *k* people actually finds.
+- **Insiders detected**: insiders with an alert between their first malicious day and one week after their last.
+- **Median detection delay**: days between the first malicious action and the first alert (0 = same day).
+- **False-alert employees**: normal employees who received at least one alert.
+- **Day-level AUC**: how well single days are separated; many malicious CERT days are web/email-only and invisible to these logs, which keeps this number low for every layer.
+""")
+    st.subheader("Ablation study: what each layer contributes")
+    show = ab[["layer", "user_auc", "user_ap", "p@10", "p@20", "p@50", "insiders_detected", "median_delay_days",
+               "false_alert_users", "day_auc"]].rename(columns={
+        "layer": "Layer", "user_auc": "User AUC", "user_ap": "User AP", "p@10": "Precision@10", "p@20": "Precision@20",
+        "p@50": "Precision@50", "insiders_detected": "Insiders detected", "median_delay_days": "Median detection delay (days)",
+        "false_alert_users": "False-alert employees", "day_auc": "Day-level AUC"})
+    st.dataframe(show.style.format(precision=3), hide_index=True, width="stretch")
+    short = ab["layer"].str.split(" · ").str[0].replace({"L0": "L0 v1", "L5": "L5 v2", "R": "Rules only"})
+    fig = go.Figure([go.Bar(x=short, y=ab["user_ap"], name="User-level AP"),
+                     go.Bar(x=short, y=ab["p@20"], name="Precision@20")])
+    fig.update_layout(barmode="group", height=360, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h"))
+    st.plotly_chart(fig, width="stretch")
+    st.caption("All layers use the same unsupervised detector and the same alert budget, so the rows compare like with like. "
+               "Ground-truth labels are used only to score each row, never to train or tune.")
+    st.subheader("Access policy in force")
+    pol = ev["policy"]
+    st.dataframe(pd.DataFrame([{"Rule": k, "Meaning": v["text"], "Severity": v["severity"],
+                                "Verdict": "Violation" if v["severity"] >= 3 else "Review"} for k, v in pol["rules"].items()]),
+                 hide_index=True, width="stretch")
+    st.caption(f"Working hours {pol['work_hours']['start']}:00–{pol['work_hours']['end']}:00 on weekdays · "
+               f"multi-PC roles: {', '.join(pol['multi_pc_roles'])} · executable transfers allowed for: "
+               f"{', '.join(pol['executable_allowed_roles'])} · approved PCs, USB use, after-hours work and usual file types are learned from each "
+               f"employee's first {pol['provisioning_days']} days (an SME would set these in its IT policy).")
 
 
-            st.divider()
+# ================================================================== ADMIN
+elif page == "Admin Console":
+    st.title("Admin Console")
+    t1, t2, t3, t4 = st.tabs(["Access requests", "All accounts", "Create account", "Audit log"])
+    accts = pd.DataFrame(get("/admin/users"))
+    with t1:
+        pend = accts[accts["status"] == "pending"] if not accts.empty else accts
+        if pend.empty:
+            st.success("No pending requests.")
+        for _, a in pend.iterrows():
+            with st.container(border=True):
+                st.markdown(f"**{a['full_name']}** · `{a['username']}` · {a['email']}  \n"
+                            f"{a['organisation'] or '—'} · requested {a['created_at']}  \n_{a['reason'] or 'No reason given'}_")
+                c1, c2, c3 = st.columns([1, 1, 1])
+                role = c1.selectbox("Role", ["viewer", "analyst", "admin"], key=f"r{a['id']}")
+                if c2.button("Approve", key=f"a{a['id']}", width="stretch", type="primary"):
+                    _, err = api("PATCH", f"/admin/users/{a['id']}", json={"status": "active", "role": role})
+                    st.error(err) if err else st.rerun()
+                if c3.button("Reject", key=f"x{a['id']}", width="stretch"):
+                    _, err = api("PATCH", f"/admin/users/{a['id']}", json={"status": "rejected"})
+                    st.error(err) if err else st.rerun()
+    with t2:
+        st.dataframe(accts[["username", "full_name", "email", "role", "status", "last_login", "approved_by", "created_at"]],
+                     hide_index=True, width="stretch")
+        who = st.selectbox("Manage account", accts["username"])
+        a = accts.set_index("username").loc[who]
+        c1, c2, c3 = st.columns(3)
+        nr = c1.selectbox("Role", ["viewer", "analyst", "admin"], index=["viewer", "analyst", "admin"].index(a["role"]))
+        ns = c2.selectbox("Status", ["active", "disabled", "pending", "rejected"],
+                          index=["active", "disabled", "pending", "rejected"].index(a["status"]))
+        if c3.button("Save changes", width="stretch"):
+            r, err = api("PATCH", f"/admin/users/{int(a['id'])}", json={"role": nr, "status": ns})
+            st.error(err) if err else st.success("Saved: " + (", ".join(r["changes"]) or "no changes"))
+        if st.button(f"Reset password for {who}"):
+            r, err = api("POST", f"/admin/users/{int(a['id'])}/reset-password")
+            if err:
+                st.error(err)
+            else:
+                st.warning(f"Temporary password: `{r['temporary_password']}` — share it privately. "
+                           "They must change it at next sign-in.")
+    with t3:
+        with st.form("create"):
+            c1, c2 = st.columns(2)
+            un, fn = c1.text_input("Username"), c2.text_input("Full name")
+            em = c1.text_input("Email")
+            rl = c2.selectbox("Role", ["analyst", "viewer", "admin"])
+            ok = st.form_submit_button("Create account")
+        if ok:
+            r, err = api("POST", "/admin/users", json={"username": un, "email": em, "full_name": fn, "role": rl})
+            st.error(err) if err else st.warning(f"Created. Temporary password: `{r['temporary_password']}`")
+    with t4:
+        lg = pd.DataFrame(get("/admin/audit", limit=1000))
+        if not lg.empty:
+            acts = st.multiselect("Action", sorted(lg["action"].unique()))
+            if acts:
+                lg = lg[lg["action"].isin(acts)]
+        st.dataframe(lg, hide_index=True, width="stretch")
+        st.caption("Investigations of individual employees are logged too, so the monitoring tool cannot itself be misused unnoticed.")
 
-            st.subheader(
-                "Main behavioral deviations"
-            )
 
-            for reason in result["reasons"]:
-
-                feature = LABELS.get(
-                    reason["feature"],
-                    reason["feature"]
-                )
-
-                st.write(
-                    f"**{feature}** — "
-                    f"{reason['value']:.0f} "
-                    f"({reason['z_score']:+.1f}σ from baseline)"
-                )
+# ================================================================== ACCOUNT
+elif page == "My Account":
+    st.title("My Account")
+    me = get("/auth/me")
+    st.write(f"**{me['full_name']}** · `{me['username']}` · {me['email']} · role **{me['role']}** · last sign-in {me['last_login']}")
+    with st.form("pw"):
+        old = st.text_input("Current password", type="password")
+        n1 = st.text_input("New password", type="password", help="10+ characters, upper & lower case, number, symbol")
+        n2 = st.text_input("Confirm new password", type="password")
+        ok = st.form_submit_button("Change password")
+    if ok:
+        if n1 != n2:
+            st.error("Passwords do not match.")
+        else:
+            _, err = api("POST", "/auth/change-password", json={"old_password": old, "new_password": n1})
+            st.error(err) if err else st.success("Password changed.")
