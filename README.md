@@ -1,165 +1,383 @@
-# TERPE — Threat Exposure & Risk Profiling Engine
+# TERPE: Threat Exposure and Risk Profiling Engine
 
-**Policy-grounded, peer-aware insider-threat detection for SMEs**, evaluated on the CMU CERT Insider Threat dataset r4.2.
+Insider-threat detection for small and medium-sized enterprises (SMEs).
 
-TERPE fuses three independent kinds of evidence into one accumulated risk per employee:
+TERPE flags employees whose computer activity looks like data theft or misuse. For every employee and every day it combines three kinds of evidence into one risk score: unusual behaviour (machine learning), breaks of access rules, and known attack sequences. Every alert shows the exact files, computers, times and rules behind it, so a security analyst can see what happened and decide what to do.
 
-1. **Behaviour anomaly (ML).** An Isolation Forest compares each user-day with the employee's own past days *and* with same-role peers.
-2. **Access-policy verdicts (rules).** Every logon, USB connection and file transfer is checked against an explicit access policy and labelled **Authorised / Review / Violation**, with the reason.
-3. **Exfiltration chains (sequences).** Ordered event patterns that match known insider scenarios, e.g. *after-hours logon → USB connected → files copied*.
-
-The result is an alert that names the exact files, PCs and rules behind it, rather than a bare anomaly score.
+**Live application:** https://insiderthreatsme-npdrkcjc6uxwmmury2hh3q.streamlit.app/
+**Backend API:** https://insider-threat-sme.onrender.com (health check: `/health`)
 
 ---
 
-## 1. What is new compared with the previous model
+## Contents
 
-| v1 | v2 | Why it matters |
+1. [Problem](#1-problem)
+2. [What TERPE does](#2-what-terpe-does)
+3. [Method](#3-method)
+4. [Results](#4-results)
+5. [Application](#5-application)
+6. [Architecture and technology](#6-architecture-and-technology)
+7. [Project structure](#7-project-structure)
+8. [Running locally](#8-running-locally)
+9. [Deployment](#9-deployment)
+10. [Reproducing the results](#10-reproducing-the-results)
+11. [API reference](#11-api-reference)
+12. [Dataset](#12-dataset)
+13. [Limitations and future work](#13-limitations-and-future-work)
+
+---
+
+## 1. Problem
+
+An insider threat is harm caused by someone who already has legitimate access to an organisation's systems, such as an employee copying confidential files before leaving. Firewalls and antivirus software do not stop these people, because they are allowed in.
+
+Small and medium-sized businesses rarely have a security team or expensive monitoring tools. They need something that:
+
+- works from logs they already have (sign-ins, USB use, file copies),
+- raises a small number of alerts a single person can review,
+- explains each alert in plain terms instead of giving a bare score.
+
+## 2. What TERPE does
+
+- Learns each employee's normal setup: which computers they use, whether they use USB drives, whether they work late, and which file types they handle.
+- Checks every sign-in, USB connection and file copy against that setup and marks it **Allowed**, **Needs review** or **Violation**, with the reason.
+- Compares each day's activity with the employee's own past and with colleagues in the same job role, using an Isolation Forest model.
+- Detects known attack sequences, such as signing in after hours, plugging in a USB drive and then copying files.
+- Adds all of this into a running risk score that builds up over repeated suspicious days and fades over quiet ones, and raises an alert when it crosses a set line.
+- Provides a web dashboard with role-based accounts, so each user sees only what their role allows and every action is recorded.
+
+## 3. Method
+
+### 3.1 Overview
+
+```
+Activity logs (sign-ins, USB, file copies, employee directory)
+        |
+        v
+Step 1  Learn each employee's normal setup (first 30 days)
+        |
+        +--> Step 2  Rule checks on every event        -> rule-break score   p(t)
+        +--> Step 3  Behaviour vs own past and peers   -> unusualness score a(t)
+        +--> Step 4  Attack-sequence detection         -> sequence count    c(t)
+                     |
+                     v
+Step 5  Day score e(t) = a(t) + p(t) + c(t)
+        Risk R(t) = 0.8^(days since last activity) x R(t-1) + e(t)
+        Alert when R(t) reaches the alert line (top 1% of all employee-days)
+```
+
+### 3.2 Step 1: Learn each employee's normal setup
+
+The first 30 days after an employee's first sign-in form a learning window. From it TERPE records:
+
+| Item | Meaning |
+|---|---|
+| Approved computers | Every computer the employee signed in to; the most used one is their main computer |
+| USB approval | Whether they used a USB or other removable device at all |
+| After-hours approval | Whether they ever signed in before 07:00, after 19:00 or at the weekend |
+| Known file types | The file extensions they copied (.doc, .pdf, .exe and so on) |
+
+A real company would set these permissions in its IT policy. The research dataset has no such policy, so TERPE learns them from the first month.
+
+### 3.3 Step 2: Rule checks
+
+After the learning window, every event is checked against five rules:
+
+| Rule | Result | Weight |
 |---|---|---|
-| z-scores computed over the **whole period** (including future days) | **Causal** self-baseline: each day is compared only with earlier days | v1 could not run live, and its evaluation was optimistic |
-| Only compares a user with themself | **Dual baseline**: self + same-role peers on the same day | Catches insiders who are abnormal from day one |
-| 6 count features | + foreign-PC logons, executable transfers, file-type diversity, after-hours file copies, **first-ever** USB / after-hours / foreign-PC behaviour | CERT scenarios are about *new* behaviour |
-| `file_copies` was just a number | **Every file transfer is listed** with time, PC, file name, type and an authorisation verdict with reasons | Analysts see *what* was accessed and *whether it was allowed* |
-| — | **Context-provisioned policy layer** (`policy.json`): every rule is checked against the employee's *own* approved context — approved PCs, USB approval, after-hours approval, usual file types | Deterministic, auditable evidence that an SME can configure |
-| — | **Exfiltration-chain detector** | The ordered combination is the attack, not any single event |
-| risk decayed per active day | Risk decays per **calendar day**; alert threshold set by an **alert budget** (top 1 % of user-days), not by labels | Matches analyst workload; no label leakage |
-| Single shared password | **Accounts** with sign-up → admin approval, roles (admin / analyst / viewer), PBKDF2-SHA256 password hashing (Python standard library), lockout, forced password change, **audit log of every investigation** | Required for a real security tool; the monitor itself is monitored |
-| No baseline comparison | **Ablation study**: v1 replica vs each added layer, with AUC, AP, Precision@k, detection rate, detection delay and false-alert employees | Shows quantitatively what each contribution adds |
+| Computer not approved for this person (IT administrators exempt) | Violation | 3 |
+| USB not approved for this person | Violation | 3 |
+| New program file (.exe, .dll, .bat, .msi, .ps1, .vbs) copied by a non-IT employee | Violation | 3 |
+| After-hours work by someone not approved for it | Needs review | 1 |
+| File type the person has never handled before | Needs review | 1 |
 
-### Research contribution (one sentence)
-*A hybrid insider-risk model that fuses context-provisioned access-policy verdicts with an unsupervised dual-baseline behaviour detector and ordered exfiltration-chain evidence in a calendar-decayed risk state, evaluated by ablation against a pure anomaly-detection baseline under a fixed analyst alert budget.*
+The rule-break score for a day is the sum over rules of `weight x ln(1 + number of times broken)`, scaled to a 0 to 3 range. The logarithm stops fifty identical violations from counting fifty times as much as one.
 
----
+### 3.4 Step 3: Behaviour compared with the past and with colleagues
 
-## 2. Pipeline
+Each day is summarised by 13 counts: sign-ins, distinct computers, after-hours sign-ins, USB connections, after-hours USB connections, files copied, sign-ins on non-approved computers, program files copied, distinct file types, files copied after hours, and three first-time flags (first USB use, first after-hours sign-in, first sign-in on another person's computer).
+
+Each count is standardised two ways:
+
+- **Against the employee's own past days only.** Each day is compared with the days before it, never with later days, so the same calculation works on live data.
+- **Against colleagues in the same job role on the same day,** which catches people who behave unusually from their first day.
+
+The raw counts and both comparisons (39 values per day) go into an **Isolation Forest** (200 trees, unsupervised, no labels used). An Isolation Forest finds unusual records by splitting the data at random: unusual days are separated after only a few splits. The unusualness score is how far a day's score lies above the 95th percentile of all days.
+
+### 3.5 Step 4: Attack sequences
+
+Three ordered patterns are checked within each employee-day, using event timestamps:
+
+1. Signs in after hours, then connects a USB device, then copies files.
+2. Signs in to a computer that is not theirs, then copies files on that computer.
+3. Uses a USB device for the first time ever and copies files the same day.
+
+### 3.6 Step 5: Risk score and alerts
+
+The day score is the sum of the three evidence values, each with equal weight, so nothing is tuned on the answer key. The risk score carries over from day to day, losing 20% per calendar day:
 
 ```
-CERT r4.2 logs (logon, device, file, LDAP)          answers/ (labels — evaluation only)
-        │
-        ▼
-Provisioning (first 30 days per employee) → approved PCs, USB approval, after-hours approval, usual file types
-        │
-        ▼
-Policy layer → every event: AUTHORISED / REVIEW / VIOLATION + violated rules
-        │
-        ▼
-Daily features (13) → causal self z-scores + same-day same-role-peer z-scores
-        │
-        ├──► Isolation Forest ─► anomaly excess  a_t
-        ├──► policy score       p_t = Σ_rule severity · log(1 + count)   (normalised)
-        └──► chain detector     c_t = number of exfiltration chains matched
-                     │
-                     ▼
-     risk_t = 0.8^(days since previous activity) · risk_(t-1) + a_t + p_t + c_t
-                     │
-                     ▼
-     alert if risk_t ≥ threshold (top 1 % of user-days = analyst alert budget)
+R(t) = 0.8^(days since the previous active day) x R(t-1) + e(t)
 ```
 
-### Access-policy rules (`results_v2/policy.json`)
+An alert is raised when the risk score reaches the alert line. The line is set so that 1% of all employee-days raise an alert, which keeps the workload manageable for a small team. Employees are ranked by the highest risk score they reach.
 
-| Rule | Verdict | Meaning |
+### 3.7 What changed from the previous model
+
+The first version of this project used only an Isolation Forest on six daily counts. It also compared each day with the employee's whole history, including future days, which a live system cannot do. The current model removes that look-ahead, adds the rule checks and attack sequences, and records the evidence behind every alert.
+
+## 4. Results
+
+Evaluated on the CERT Insider Threat dataset r4.2: 1,000 simulated employees, 70 of whom are known insiders. The dataset's answer key is used only to score the results, never to build or tune the model.
+
+To show what each part contributes, the method was built up one step at a time from the previous model and measured after each step (an ablation study). All rows use the same data and the same 1% alert line.
+
+| Model | Insiders in top 10 | Top 20 | Top 50 | Insiders caught during attack | Normal employees wrongly flagged | AUC | Average precision |
+|---|---|---|---|---|---|---|---|
+| Previous model (unusualness score only) | 5 | 10 | 22 | 10 / 70 | 16 | 0.84 | 0.33 |
+| + compare only with past days | 5 | 7 | 14 | 7 / 70 | 13 | 0.86 | 0.28 |
+| + compare with same-role colleagues | 5 | 9 | 14 | 12 / 70 | 36 | 0.78 | 0.27 |
+| + 7 extra behaviour counts | 5 | 8 | 17 | 21 / 70 | 43 | 0.82 | 0.28 |
+| + rule checks | 8 | 15 | 30 | 33 / 70 | 43 | 0.87 | 0.50 |
+| **Current model (+ attack sequences)** | **10** | **19** | **37** | **40 / 70** | **44** | **0.88** | **0.61** |
+| Rules only, no machine learning | 10 | 20 | 36 | 43 / 70 | 147 | 0.85 | 0.61 |
+
+**How to read the columns**
+
+- **Insiders in top 10 / 20 / 50:** real insiders among the employees with the highest risk scores. An analyst usually reviews only the top of the list.
+- **Insiders caught during attack:** insiders who received an alert between their first malicious action and one week after their last.
+- **Normal employees wrongly flagged:** non-insiders (out of 930) who received at least one alert.
+- **AUC:** the probability that a randomly chosen insider has a higher risk score than a randomly chosen normal employee (0.5 is guessing, 1.0 is perfect).
+- **Average precision:** how closely the insiders are packed at the top of the ranking (0 to 1). It is the stricter measure when, as here, only 7% of employees are insiders.
+
+**Findings**
+
+- The rule checks give the largest single improvement, and the attack sequences add to it. The current model catches 40 of 70 insiders during their attack, against 10 for the previous model, usually on the first malicious day.
+- Machine learning alone does not beat the previous model. The second row is lower because it no longer looks at future days, an advantage the previous model had and a live system cannot.
+- Rules alone find insiders well but wrongly flag 147 normal employees. Combining rules with machine learning and the running risk score keeps detection high while cutting false alerts by about 70%.
+
+**By insider type (current model)**
+
+| Insider type in the dataset | Insiders | Flagged |
 |---|---|---|
-| `FOREIGN_PC` | Violation | Used a PC outside the employee's approved PCs (IT admins exempt) |
-| `USB_NOT_PROVISIONED` | Violation | Removable media used by an employee not approved for USB |
-| `EXECUTABLE_TRANSFER` | Violation | A *new* executable type moved via removable media by a non-IT role |
-| `AFTER_HOURS` | Review | Outside 07:00–19:00 / weekends, by an employee not approved for after-hours work |
-| `NEW_FILE_TYPE` | Review | File type the employee never handled during provisioning |
+| Starts working late and copying data to USB, then leaves | 30 | 29 |
+| Disgruntled IT administrator plants a keylogger | 10 | 10 |
+| Job-hunts, then copies data before leaving | 30 | 2 |
 
-In CERT r4.2 the file log records **files copied to removable media**, which is the exfiltration channel the dataset models. The same policy engine works on any file-access event (open/write/delete), e.g. CERT r6.2 or real SME logs.
+The job-hunting insiders were already approved USB users, and their main warning sign is web browsing, which this version does not use.
 
----
+## 5. Application
 
-## 3. Evaluation (CERT r4.2, 1000 employees, 70 insiders)
+### 5.1 Roles
 
-Run `python pipeline.py` and the table is written to `results_v2/ablation.csv` and shown on the dashboard's *Methodology & Evaluation* page.
+Anyone can request an account from the sign-in page. An administrator approves or rejects the request and assigns a role.
 
-| Layer | User AUC | User AP | P@10 | P@20 | P@50 | Insiders detected | False-alert employees | Day AUC (observable) |
-|---|---|---|---|---|---|---|---|---|
-| L0 · the previous model replica | 0.840 | 0.332 | 0.50 | 0.50 | 0.44 | 10/70 | 16 | 0.704 |
-| L1 · + causal self-baseline | 0.858 | 0.280 | 0.50 | 0.35 | 0.28 | 7/70 | 13 | 0.698 |
-| L2 · + peer baseline | 0.778 | 0.270 | 0.50 | 0.45 | 0.28 | 12/70 | 36 | 0.646 |
-| L3 · + context features | 0.822 | 0.281 | 0.50 | 0.40 | 0.34 | 21/70 | 43 | 0.639 |
-| L4 · + policy fusion | 0.868 | 0.501 | 0.80 | 0.75 | 0.60 | 33/70 | 43 | 0.714 |
-| **L5 · + exfiltration chains (TERPE)** | 0.875 | 0.606 | 1.00 | 0.95 | 0.74 | 40/70 | 44 | 0.714 |
-| R · rules only (no ML) | 0.846 | 0.611 | 1.00 | 1.00 | 0.72 | 43/70 | 147 | 0.666 |
+| Role | Can see and do |
+|---|---|
+| Viewer | Overview, How it works, Results |
+| Analyst | Everything a viewer can, plus individual employees, file-level activity and the risk check |
+| Administrator | Everything an analyst can, plus approving and managing accounts and reading the audit log |
+| Owner | The first administrator. Only the owner can give someone the administrator role, and no one else can change the owner's account |
 
-**Reading the table**
-- **The previous model (L0)** puts 5 insiders in its top 10 and detects 10 of 70 insiders inside their malicious window.
-- **the current model (L5)** puts **10 of 10** insiders in its top 10 and 19 of 20 in its top 20, raises user-level AP from 0.33 to **0.61**, and detects **40 of 70** insiders (4× v1), with a median detection delay of 0 days (alerted on the first malicious day).
-- **The ML-only layers (L1–L3) do not help on their own.** The causal baseline removes v1's optimistic look-ahead (so its numbers drop), and peer/context features add noise when used alone. Their value appears once fused with the policy layer.
-- **Rules alone (R)** rank insiders as well as v2 but raise alerts on **147** normal employees; fusing with the ML and accumulating risk keeps v2's recall while cutting false-alert employees to **44**. That trade-off is the core argument for the hybrid design.
-- **By scenario:** scenario 1 (after-hours USB exfiltration) 29/30 insiders alerted, scenario 3 (disgruntled IT admin) 10/10, scenario 2 (job-hunting before leaving) only 2/30, because those insiders were already approved USB users and their main signal is web browsing, which v2 does not use yet (future work).
-- *Day AUC (observable)* only counts malicious days that contain logon/USB/file events; many CERT malicious days are web/email-only and invisible to these logs.
+### 5.2 Pages
 
-Labels are used **only** to score each row, never to train or tune.
+| Page | Purpose |
+|---|---|
+| Overview | Company-wide risk: employees with alerts, rule breaks, highest-risk employees, weekly trend |
+| Employees | One employee's risk over time; for any day, the reasons, every file copied, the computers used and how the day compares with their past and their colleagues |
+| File activity | Every file copy across the company that broke a rule or needs review |
+| Risk check | Enter one day of activity for an employee and see how it would be scored |
+| How it works | Plain-language description of the method |
+| Results | Evaluation results and what they mean |
+| User management | Approve requests, change roles, disable accounts, reset passwords, read the audit log |
+| My account | Change your own password |
 
----
+**Evaluation mode** (sidebar switch) marks the employees that the dataset's answer key lists as insiders, so alerts can be checked against the truth. A real company would not have an answer key.
 
-## 4. Project structure
+### 5.3 Security
+
+- Passwords are hashed with PBKDF2-HMAC-SHA256 (600,000 iterations, a random salt per user) and are never stored in plain text.
+- Passwords must have at least 10 characters with upper and lower case letters, a number and a symbol, and must not contain the username.
+- Five failed sign-ins lock an account for 15 minutes.
+- Temporary passwords issued by an administrator must be changed at the next sign-in.
+- Sessions use signed tokens that expire after 8 hours.
+- Every sign-in, failed sign-in, account change, employee investigation and risk check is written to the audit log.
+
+## 6. Architecture and technology
 
 ```
-pipeline.py          builds everything in results_v2/ from the raw CERT data + runs the ablation study
-api.py               FastAPI backend: data, live scoring, accounts, admin, audit log
-auth.py              accounts, roles, password hashing, JWT sessions, audit log
-app.py               Streamlit dashboard
-download_data.py     downloads the needed CERT r4.2 files (~290 MB)
-results_v2/          pipeline outputs used by the API
-.streamlit/config.toml   dark theme
-v1_backup/           the original the previous model code and results
+Browser
+   |
+   v
+Streamlit dashboard (app.py)            Streamlit Community Cloud
+   |   HTTPS, signed session token
+   v
+FastAPI backend (api.py, auth.py)       Render
+   |                    |
+   v                    v
+Results files       PostgreSQL           Neon (user accounts and audit log)
+(results_v2/)
+   ^
+   |
+Offline pipeline (pipeline.py) run on the CERT r4.2 logs
 ```
 
----
+| Layer | Technology |
+|---|---|
+| Data processing and features | Python, pandas, NumPy, PyArrow (Parquet) |
+| Machine learning | scikit-learn Isolation Forest for training; NumPy-only scoring at run time (`iforest_lite.py`) |
+| Backend | FastAPI, Uvicorn, PyJWT |
+| Accounts storage | PostgreSQL (Neon) in deployment, SQLite locally |
+| Dashboard | Streamlit, Plotly |
+| Hosting | Render (backend), Streamlit Community Cloud (dashboard) |
 
-## 5. Running locally
+The backend keeps its memory below 512 MB (Render's free plan): numbers are stored as 32-bit values, only the columns needed for charts are kept in memory, per-day details are read from disk on demand, and the model is loaded on first use.
+
+## 7. Project structure
+
+```
+insider_threat_sme/
+  app.py               Streamlit dashboard
+  api.py               FastAPI backend: data, risk check, accounts, audit log
+  auth.py              Accounts, roles, password hashing, sessions, audit log
+  pipeline.py          Builds all results from the raw CERT logs and runs the ablation study
+  iforest_lite.py      Scores the trained Isolation Forest with NumPy only
+  download_data.py     Downloads the needed CERT r4.2 files (about 290 MB)
+  make_synthetic.py    Small synthetic dataset in CERT format, for testing the pipeline
+  requirements.txt     Python packages
+  RUN_LOCAL.bat        One-click start on Windows
+  DOWNLOAD_DATA.bat    One-click data download on Windows
+  .streamlit/
+    config.toml        Dashboard theme
+  results_v2/          Pipeline outputs used by the backend
+    daily.parquet          one row per employee-day: counts, comparisons, scores, risk, reasons
+    file_events.parquet    every file copy with its result and the rules it broke
+    access_events.parquet  sign-ins and USB connections that were not allowed
+    users.parquet          one row per employee: role, department, highest risk, alert days
+    ablation.csv           evaluation results
+    policy.json            access rules, working hours, weights
+    model_v2.joblib        trained model (scikit-learn)
+    model_lite.joblib      the same model as plain arrays, used by the backend
+  v1_backup/           Code and results of the previous model
+```
+
+## 8. Running locally
+
+Requirements: Python 3.11 or newer.
+
+**Windows, one click:** double-click `RUN_LOCAL.bat`. On first run it installs the packages and asks for the administrator password. The dashboard opens at http://localhost:8501. Sign in as `yasaswi` with that password. Keep both command windows open while using it.
+
+**Any system, manually:**
 
 ```bash
 python -m pip install -r requirements.txt
-python -m pip install huggingface_hub && python download_data.py     # once
-python pipeline.py --data data --out results_v2                     # ~5–10 min
 
-# terminal 1 — backend (PowerShell: use  $env:NAME="value"  instead of  set)
-set JWT_SECRET=<long random string>
-set ADMIN_USERNAME=admin
-set ADMIN_PASSWORD=<strong password>
-python -m uvicorn api:app --host 0.0.0.0 --port 8000
+# terminal 1: backend
+export ADMIN_USERNAME=yasaswi
+export ADMIN_PASSWORD='<strong password>'
+export JWT_SECRET='<long random string>'
+python -m uvicorn api:app --host 127.0.0.1 --port 8000
 
-# terminal 2 — dashboard
+# terminal 2: dashboard
+mkdir -p .streamlit && echo 'API_URL = "http://127.0.0.1:8000"' > .streamlit/secrets.toml
 python -m streamlit run app.py
 ```
 
-Sign in with the admin account, then change its password under **My Account**. New people use **Request access** on the sign-in page; approve them under **Admin Console → Access requests**.
+On Windows PowerShell use `$env:ADMIN_USERNAME="yasaswi"` instead of `export`.
 
-## 6. Deployment
+## 9. Deployment
 
-**Backend host** environment variables:
+**Backend on Render.** Web service from this repository, `main` branch.
 
-| Variable | Required | Notes |
-|---|---|---|
-| `JWT_SECRET` | yes | long random string; generate with `python -c "import secrets;print(secrets.token_urlsafe(48))"` |
-| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | first start | creates the first admin if none exists |
-| `DATABASE_URL` | recommended | Postgres URL (e.g. free Neon / Supabase). Without it, accounts live in a SQLite file, which free hosts like Render **wipe on every restart** |
-| `RESULTS_DIR` | no | default `results_v2` |
+- Build command: `pip install -r requirements.txt`
+- Start command: `uvicorn api:app --host 0.0.0.0 --port $PORT`
+- Environment variables:
 
-**Streamlit Cloud** → App settings → Secrets: only
+| Variable | Purpose |
+|---|---|
+| `JWT_SECRET` | Long random string used to sign sessions |
+| `ADMIN_USERNAME` | Owner account, created on first start if no administrator exists |
+| `ADMIN_PASSWORD` | Password for that account; change it after the first sign-in |
+| `DATABASE_URL` | PostgreSQL connection string (Neon). Without it, accounts are kept in a local file that Render erases on every restart |
+
+**Dashboard on Streamlit Community Cloud.** App file `app.py`, `main` branch. The only secret needed is:
 
 ```toml
-API_URL = "https://<your-backend-host>"
+API_URL = "https://insider-threat-sme.onrender.com"
 ```
 
-The old `APP_PASSWORD` and `API_KEY` secrets are no longer used and should be deleted.
+Pushing to `main` redeploys both automatically. On Render's free plan the backend sleeps when unused, so the first request after a pause can take up to a minute.
 
-## 7. Roles
+## 10. Reproducing the results
 
-| Role | Can do |
+```bash
+python -m pip install -r requirements.txt huggingface_hub
+python download_data.py                         # about 290 MB into data/
+python pipeline.py --data data --out results_v2 # about 2 minutes
+```
+
+The pipeline prints the ablation table and writes every file in `results_v2/`. To test the pipeline without the real data:
+
+```bash
+python make_synthetic.py synth
+python pipeline.py --data synth --out synth_out
+```
+
+## 11. API reference
+
+All endpoints except `/health`, `/auth/signup` and `/auth/login` require the header `Authorization: Bearer <token>`. Interactive documentation is available at `/docs` on the backend.
+
+| Method and path | Role | Description |
+|---|---|---|
+| `GET /health` | none | Service status |
+| `POST /auth/signup` | none | Request an account (pending approval) |
+| `POST /auth/login` | none | Sign in; returns a session token |
+| `GET /auth/me` | any | Current user |
+| `POST /auth/change-password` | any | Change own password |
+| `GET /overview` | viewer | Company-wide figures |
+| `GET /users/top?n=` | viewer | Employees ranked by highest risk |
+| `GET /evaluation` | viewer | Ablation results and access rules |
+| `GET /users/{id}/profile` | analyst | One employee's summary |
+| `GET /users/{id}/timeline` | analyst | Daily scores and risk |
+| `GET /users/{id}/day/{yyyy-mm-dd}` | analyst | Reasons, files, events and comparisons for one day |
+| `GET /users/{id}/files` | analyst | All file copies by one employee |
+| `GET /files/feed?verdict=` | analyst | Company-wide file copies that broke a rule or need review |
+| `POST /score` | analyst | Score one day of activity |
+| `GET /admin/users` | admin | All accounts |
+| `POST /admin/users` | admin | Create an account with a temporary password |
+| `PATCH /admin/users/{id}` | admin | Change role or status (approve, reject, disable) |
+| `POST /admin/users/{id}/reset-password` | admin | Issue a temporary password |
+| `GET /admin/audit` | admin | Audit log |
+
+## 12. Dataset
+
+CERT Insider Threat Test Dataset, release r4.2, published by the CERT Division of the Software Engineering Institute, Carnegie Mellon University: Lindauer, B. (2020). *Insider Threat Test Dataset*. https://doi.org/10.1184/R1/12841247.v1
+
+| Item | Value |
 |---|---|
-| Viewer | Overview, Methodology & Evaluation |
-| Analyst | + investigate employees, file-level access log, organisation-wide file monitor, live scoring |
-| Admin | + approve/reject sign-ups, change roles, disable accounts, reset passwords, audit log |
+| Period | 2 January 2010 to 17 May 2011 |
+| Employees | 1,000, with monthly directory snapshots (role, department, supervisor) |
+| Sign-in and sign-out events | 854,859 |
+| USB connect and disconnect events | 405,380 |
+| File copies to USB | 445,581 |
+| Insiders | 70 (30, 30 and 10 across three scenarios) |
 
-## 8. Limitations
+The raw data is not stored in this repository. Run `download_data.py` to fetch it.
 
-- CERT r4.2 is synthetic and "dense-needle" (an unrealistically high share of malicious activity).
-- r4.2 has no real access-control list, so USB approval, assigned PC and usual file types are learned from each employee's first 30 days. A real SME would set these from its IT policy in `policy.json`.
-- Web (http) and email logs are not used yet. Scenario 2 (job-hunting before leaving) is partly a web-browsing signal.
-- A high risk score is evidence for human review, not proof of malicious intent.
+## 13. Limitations and future work
+
+**Limitations**
+
+- The dataset is synthetic and contains far more insiders than a real company would.
+- The dataset has no access policy, so each employee's permissions are learned from their first 30 days.
+- Release r4.2 records only files copied to USB, not every file opened, edited or deleted.
+- Web browsing and email are not used, which is why job-hunting insiders are mostly missed.
+- A high risk score is a reason to look closer, not proof of wrongdoing. Decisions about people need human review.
+
+**Future work**
+
+- Add web-browsing and email signals (job sites, cloud storage uploads, emails to personal addresses).
+- Test on CERT r5.2 and r6.2; r6.2 also records file opens, edits and deletions.
+- Let administrators edit access permissions in the dashboard instead of learning them.
+- Collect analyst feedback on alerts to adjust rule weights over time.
+- Send alert notifications by email.
