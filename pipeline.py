@@ -22,6 +22,7 @@ import json
 import os
 
 import joblib
+import iforest_lite
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
@@ -448,6 +449,10 @@ def main():
                      self_base=base, peer_base=peer, last=last,
                      ctx=ctx[["role", "department", "assigned_pc", "usb_approved", "after_hours_approved"]]),
                 os.path.join(a.out, "model_v2.joblib"))
+    # numpy-only copy of the model for the API (scikit-learn is not needed at serving time)
+    lite = joblib.load(os.path.join(a.out, "model_v2.joblib"))
+    lite["lite"] = iforest_lite.export(lite.pop("model"))
+    joblib.dump(lite, os.path.join(a.out, "model_lite.joblib"))
     json.dump(pol, open(os.path.join(a.out, "policy.json"), "w"), indent=2)
     print(abl.round(3).to_string())
     print("saved to", a.out)

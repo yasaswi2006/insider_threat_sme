@@ -1,8 +1,8 @@
-# TERPE v2 — Threat Exposure & Risk Profiling Engine
+# TERPE — Threat Exposure & Risk Profiling Engine
 
 **Policy-grounded, peer-aware insider-threat detection for SMEs**, evaluated on the CMU CERT Insider Threat dataset r4.2.
 
-TERPE v2 fuses three independent kinds of evidence into one accumulated risk per employee:
+TERPE fuses three independent kinds of evidence into one accumulated risk per employee:
 
 1. **Behaviour anomaly (ML).** An Isolation Forest compares each user-day with the employee's own past days *and* with same-role peers.
 2. **Access-policy verdicts (rules).** Every logon, USB connection and file transfer is checked against an explicit access policy and labelled **Authorised / Review / Violation**, with the reason.
@@ -12,7 +12,7 @@ The result is an alert that names the exact files, PCs and rules behind it, rath
 
 ---
 
-## 1. What is new compared with TERPE v1
+## 1. What is new compared with the previous model
 
 | v1 | v2 | Why it matters |
 |---|---|---|
@@ -76,17 +76,17 @@ Run `python pipeline.py` and the table is written to `results_v2/ablation.csv` a
 
 | Layer | User AUC | User AP | P@10 | P@20 | P@50 | Insiders detected | False-alert employees | Day AUC (observable) |
 |---|---|---|---|---|---|---|---|---|
-| L0 · TERPE v1 replica | 0.840 | 0.332 | 0.50 | 0.50 | 0.44 | 10/70 | 16 | 0.704 |
+| L0 · the previous model replica | 0.840 | 0.332 | 0.50 | 0.50 | 0.44 | 10/70 | 16 | 0.704 |
 | L1 · + causal self-baseline | 0.858 | 0.280 | 0.50 | 0.35 | 0.28 | 7/70 | 13 | 0.698 |
 | L2 · + peer baseline | 0.778 | 0.270 | 0.50 | 0.45 | 0.28 | 12/70 | 36 | 0.646 |
 | L3 · + context features | 0.822 | 0.281 | 0.50 | 0.40 | 0.34 | 21/70 | 43 | 0.639 |
 | L4 · + policy fusion | 0.868 | 0.501 | 0.80 | 0.75 | 0.60 | 33/70 | 43 | 0.714 |
-| **L5 · + exfiltration chains (TERPE v2)** | 0.875 | 0.606 | 1.00 | 0.95 | 0.74 | 40/70 | 44 | 0.714 |
+| **L5 · + exfiltration chains (TERPE)** | 0.875 | 0.606 | 1.00 | 0.95 | 0.74 | 40/70 | 44 | 0.714 |
 | R · rules only (no ML) | 0.846 | 0.611 | 1.00 | 1.00 | 0.72 | 43/70 | 147 | 0.666 |
 
 **Reading the table**
-- **TERPE v1 (L0)** puts 5 insiders in its top 10 and detects 10 of 70 insiders inside their malicious window.
-- **TERPE v2 (L5)** puts **10 of 10** insiders in its top 10 and 19 of 20 in its top 20, raises user-level AP from 0.33 to **0.61**, and detects **40 of 70** insiders (4× v1), with a median detection delay of 0 days (alerted on the first malicious day).
+- **The previous model (L0)** puts 5 insiders in its top 10 and detects 10 of 70 insiders inside their malicious window.
+- **the current model (L5)** puts **10 of 10** insiders in its top 10 and 19 of 20 in its top 20, raises user-level AP from 0.33 to **0.61**, and detects **40 of 70** insiders (4× v1), with a median detection delay of 0 days (alerted on the first malicious day).
 - **The ML-only layers (L1–L3) do not help on their own.** The causal baseline removes v1's optimistic look-ahead (so its numbers drop), and peer/context features add noise when used alone. Their value appears once fused with the policy layer.
 - **Rules alone (R)** rank insiders as well as v2 but raise alerts on **147** normal employees; fusing with the ML and accumulating risk keeps v2's recall while cutting false-alert employees to **44**. That trade-off is the core argument for the hybrid design.
 - **By scenario:** scenario 1 (after-hours USB exfiltration) 29/30 insiders alerted, scenario 3 (disgruntled IT admin) 10/10, scenario 2 (job-hunting before leaving) only 2/30, because those insiders were already approved USB users and their main signal is web browsing, which v2 does not use yet (future work).
@@ -106,7 +106,7 @@ app.py               Streamlit dashboard
 download_data.py     downloads the needed CERT r4.2 files (~290 MB)
 results_v2/          pipeline outputs used by the API
 .streamlit/config.toml   dark theme
-v1_backup/           the original TERPE v1 code and results
+v1_backup/           the original the previous model code and results
 ```
 
 ---

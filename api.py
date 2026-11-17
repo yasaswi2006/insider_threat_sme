@@ -12,6 +12,7 @@ import json
 import os
 
 import joblib
+import iforest_lite
 import pyarrow.parquet as pq
 import numpy as np
 import pandas as pd
@@ -68,9 +69,9 @@ _model = {}
 
 
 def model():
-    """The ML model (and scikit-learn) is loaded on first live-scoring request to keep start-up memory low."""
+    """The trained model is loaded on the first live-scoring request to keep start-up memory low."""
     if not _model:
-        _model.update(joblib.load(f"{RESULTS}/model_v2.joblib"))
+        _model.update(joblib.load(f"{RESULTS}/model_lite.joblib"))  # numpy-only copy of the trained model
     return _model
 live_risk = {}
 
@@ -370,7 +371,7 @@ def score(b: LiveIn, u: User = Depends(require("analyst"))):
         row[f + "_zself"] = (x[f] - sb[f + "_mean"]) / max(np.nan_to_num(sb[f + "_std"]), 1.0)
         row[f + "_zpeer"] = (x[f] - pb[f + "_mean"]) / max(np.nan_to_num(pb[f + "_std"]), 1.0)
     X = pd.DataFrame([row])[M["cols"]].values
-    s = float(-M["model"].score_samples(X)[0])
+    s = float(-iforest_lite.score_samples(M["lite"], X)[0])
     excess = max(0.0, (s - M["thr"]) / max(M["top"] - M["thr"], 1e-9))
     multi = bool(ctx["role"] in POL["multi_pc_roles"])
     ah_ok = bool(ctx.get("after_hours_approved", False))
@@ -385,9 +386,9 @@ def score(b: LiveIn, u: User = Depends(require("analyst"))):
               "CHAIN_FIRST_MEDIA_BURST": bool(x["first_usb"] > 0 and x["file_copies"] > 0)}
     w = POL["fusion_weights"]
     e = w["anomaly"] * excess + w["policy"] * pnorm + w["chain"] * sum(chains.values())
-    prev = live_risk.get(b.user_id, float(M["last"].loc[b.user_id, "risk"]) if b.user_id in M["last"].index else 0.0)
+    # a what-if check: start from the employee's last recorded risk every time (test runs do not pile up)
+    prev = float(M["last"].loc[b.user_id, "risk"]) if b.user_id in M["last"].index else 0.0
     risk = POL["decay"] * prev + e
-    live_risk[b.user_id] = risk
     audit(u.username, "LIVE_SCORE", b.user_id, json.dumps(x))
     return {"user_id": b.user_id, "anomaly_score": round(s, 4), "anomalous_day": bool(s > M["thr"]),
             "anomaly_component": round(float(excess), 3), "policy_component": round(float(pnorm), 3),
