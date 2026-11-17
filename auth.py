@@ -58,11 +58,11 @@ def _dt(s):
 class _DB:
     def __init__(self, url):
         self.lock = threading.Lock()
+        self.url = url
         if url.startswith(("postgres://", "postgresql://")):
             import psycopg2  # only needed for PostgreSQL deployments
             self.pg = True
-            self.conn = psycopg2.connect(url)
-            self.conn.autocommit = True
+            self._connect()
             idcol = "SERIAL PRIMARY KEY"
         else:
             self.pg = False
@@ -78,17 +78,45 @@ class _DB:
         self.run(f"""CREATE TABLE IF NOT EXISTS audit_log (
             id {idcol}, ts TEXT, actor TEXT, action TEXT, target TEXT DEFAULT '', detail TEXT DEFAULT '')""")
 
-    def run(self, sql, params=(), fetch=False):
-        if self.pg:
-            sql = sql.replace("?", "%s")
-        with self.lock:
-            cur = self.conn.cursor()
+    def _connect(self):
+        import psycopg2
+        # keepalives notice a dead connection quickly instead of hanging
+        self.conn = psycopg2.connect(self.url, connect_timeout=15, keepalives=1, keepalives_idle=30,
+                                     keepalives_interval=10, keepalives_count=3)
+        self.conn.autocommit = True
+
+    def _execute(self, sql, params, fetch):
+        cur = self.conn.cursor()
+        try:
             cur.execute(sql, params)
-            rows = cur.fetchall() if fetch else None
-            if not self.pg:
-                self.conn.commit()
+            return cur.fetchall() if fetch else None
+        finally:
             cur.close()
-        return rows
+
+    def run(self, sql, params=(), fetch=False):
+        if not self.pg:
+            with self.lock:
+                rows = self._execute(sql, params, fetch)
+                self.conn.commit()
+            return rows
+        import psycopg2
+        sql = sql.replace("?", "%s")
+        with self.lock:
+            # Hosted Postgres (e.g. Neon) suspends when idle and drops open connections:
+            # reconnect once and retry instead of failing the request.
+            for attempt in (1, 2):
+                try:
+                    if self.conn.closed:
+                        self._connect()
+                    return self._execute(sql, params, fetch)
+                except (psycopg2.OperationalError, psycopg2.InterfaceError):
+                    if attempt == 2:
+                        raise
+                    try:
+                        self.conn.close()
+                    except Exception:
+                        pass
+                    self._connect()
 
 
 _db = None
