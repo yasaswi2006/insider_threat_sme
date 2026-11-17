@@ -23,7 +23,7 @@ The result is an alert that names the exact files, PCs and rules behind it, rath
 | — | **Context-provisioned policy layer** (`policy.json`): every rule is checked against the employee's *own* approved context — approved PCs, USB approval, after-hours approval, usual file types | Deterministic, auditable evidence that an SME can configure |
 | — | **Exfiltration-chain detector** | The ordered combination is the attack, not any single event |
 | risk decayed per active day | Risk decays per **calendar day**; alert threshold set by an **alert budget** (top 1 % of user-days), not by labels | Matches analyst workload; no label leakage |
-| Single shared password | **Accounts** with sign-up → admin approval, roles (admin / analyst / viewer), bcrypt hashing, lockout, forced password change, **audit log of every investigation** | Required for a real security tool; the monitor itself is monitored |
+| Single shared password | **Accounts** with sign-up → admin approval, roles (admin / analyst / viewer), PBKDF2-SHA256 password hashing (Python standard library), lockout, forced password change, **audit log of every investigation** | Required for a real security tool; the monitor itself is monitored |
 | No baseline comparison | **Ablation study**: v1 replica vs each added layer, with AUC, AP, Precision@k, detection rate, detection delay and false-alert employees | Shows quantitatively what each contribution adds |
 
 ### Research contribution (one sentence)

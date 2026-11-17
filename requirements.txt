@@ -9,7 +9,5 @@ scikit-learn==1.9.1
 joblib==1.6.0
 pydantic==2.13.5
 pyarrow>=17
-sqlalchemy>=2.0
-bcrypt>=4.1
 PyJWT>=2.8
 psycopg2-binary>=2.9

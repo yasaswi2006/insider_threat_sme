@@ -17,10 +17,10 @@ import numpy as np
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Path, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 
-from auth import (OWNER, ROLES, Audit, Session, User, audit, check_pw, current_user, hash_pw, init_db, make_token,
-                  now, password_problems, require, temp_password, MAX_FAILS, LOCK_MINUTES)
+from auth import (LOCK_MINUTES, MAX_FAILS, OWNER, ROLES, User, _dt, _ts, audit, check_pw, create_user,
+                  current_user, get_user, hash_pw, init_db, list_audit, list_users, make_token, now,
+                  password_problems, require, temp_password, update_user, user_exists)
 from datetime import timedelta
 
 RESULTS = os.environ.get("RESULTS_DIR", "results_v2")
@@ -117,40 +117,38 @@ def signup(b: SignupIn):
     probs = password_problems(b.password, b.username)
     if probs:
         raise HTTPException(422, "Password must have: " + ", ".join(probs))
-    with Session() as s:
-        if s.scalar(select(User).where((User.username == b.username) | (User.email == b.email.lower()))):
-            raise HTTPException(409, "Username or email already registered")
-        s.add(User(username=b.username, email=b.email.lower(), full_name=b.full_name, organisation=b.organisation,
-                   reason=b.reason, password_hash=hash_pw(b.password), role="viewer", status="pending"))
-        s.commit()
+    if user_exists(b.username, b.email.lower()):
+        raise HTTPException(409, "Username or email already registered")
+    create_user(username=b.username, email=b.email.lower(), full_name=b.full_name, organisation=b.organisation,
+                reason=b.reason, password_hash=hash_pw(b.password), role="viewer", status="pending")
     audit(b.username, "SIGNUP_REQUEST", b.username, b.reason)
     return {"message": "Request received. An administrator must approve your account before you can sign in."}
 
 
 @app.post("/auth/login")
 def login(b: LoginIn):
-    with Session() as s:
-        u = s.scalar(select(User).where(User.username == b.username))
-        if u and u.locked_until and u.locked_until > now():
-            mins = int((u.locked_until - now()).total_seconds() // 60) + 1
-            raise HTTPException(423, f"Account locked after too many failed attempts. Try again in {mins} min.")
-        if not u or not check_pw(b.password, u.password_hash):
-            if u:
-                u.failed_attempts += 1
-                if u.failed_attempts >= MAX_FAILS:
-                    u.locked_until, u.failed_attempts = now() + timedelta(minutes=LOCK_MINUTES), 0
-                s.commit()
-            audit(b.username, "LOGIN_FAILED")
-            raise HTTPException(401, "Incorrect username or password")
-        if u.status == "pending":
-            raise HTTPException(403, "Your account is waiting for administrator approval")
-        if u.status in ("disabled", "rejected"):
-            raise HTTPException(403, f"Your account is {u.status}. Contact an administrator.")
-        u.failed_attempts, u.locked_until, u.last_login = 0, None, now()
-        s.commit()
-        token, pub = make_token(u), u.public()
+    u = get_user(username=b.username)
+    locked = _dt(u.locked_until) if u else None
+    if locked and locked > now():
+        mins = max(1, -(-int((locked - now()).total_seconds()) // 60))
+        raise HTTPException(423, f"Account locked after too many failed attempts. Try again in {mins} min.")
+    if not u or not check_pw(b.password, u.password_hash):
+        if u:
+            fails = (u.failed_attempts or 0) + 1
+            if fails >= MAX_FAILS:
+                update_user(u.id, failed_attempts=0, locked_until=_ts(now() + timedelta(minutes=LOCK_MINUTES)))
+            else:
+                update_user(u.id, failed_attempts=fails)
+        audit(b.username, "LOGIN_FAILED")
+        raise HTTPException(401, "Incorrect username or password")
+    if u.status == "pending":
+        raise HTTPException(403, "Your account is waiting for administrator approval")
+    if u.status in ("disabled", "rejected"):
+        raise HTTPException(403, f"Your account is {u.status}. Contact an administrator.")
+    update_user(u.id, failed_attempts=0, locked_until=None, last_login=_ts(now()))
+    u = get_user(uid=u.id)
     audit(b.username, "LOGIN")
-    return {"token": token, "user": pub}
+    return {"token": make_token(u), "user": u.public()}
 
 
 @app.get("/auth/me")
@@ -167,10 +165,7 @@ def change_password(b: ChangePwIn, u: User = Depends(current_user)):
         raise HTTPException(422, "Password must have: " + ", ".join(probs))
     if b.new_password == b.old_password:
         raise HTTPException(422, "New password must be different")
-    with Session() as s:
-        db = s.get(User, u.id)
-        db.password_hash, db.must_change_password = hash_pw(b.new_password), False
-        s.commit()
+    update_user(u.id, password_hash=hash_pw(b.new_password), must_change_password=0)
     audit(u.username, "PASSWORD_CHANGED", u.username)
     return {"message": "Password updated"}
 
@@ -190,8 +185,7 @@ class CreateUserIn(BaseModel):
 
 @app.get("/admin/users")
 def admin_users(a: User = Depends(require("admin"))):
-    with Session() as s:
-        return [u.public() for u in s.scalars(select(User).order_by(User.created_at.desc()))]
+    return [u.public() for u in list_users()]
 
 
 @app.post("/admin/users")
@@ -200,13 +194,11 @@ def admin_create(b: CreateUserIn, a: User = Depends(require("admin"))):
         raise HTTPException(422, "Unknown role")
     if b.role == "admin" and a.username != OWNER:
         raise HTTPException(403, "Only the owner can create admin accounts")
+    if user_exists(b.username, b.email.lower()):
+        raise HTTPException(409, "Username or email already registered")
     pw = temp_password()
-    with Session() as s:
-        if s.scalar(select(User).where((User.username == b.username) | (User.email == b.email.lower()))):
-            raise HTTPException(409, "Username or email already registered")
-        s.add(User(username=b.username, email=b.email.lower(), full_name=b.full_name, role=b.role, status="active",
-                   password_hash=hash_pw(pw), must_change_password=True, approved_by=a.username))
-        s.commit()
+    create_user(username=b.username, email=b.email.lower(), full_name=b.full_name, role=b.role, status="active",
+                password_hash=hash_pw(pw), must_change_password=1, approved_by=a.username)
     audit(a.username, "USER_CREATED", b.username, f"role={b.role}")
     return {"message": "Account created", "temporary_password": pw}
 
@@ -219,49 +211,41 @@ def admin_patch(uid: int, b: UserPatch, a: User = Depends(require("admin"))):
         raise HTTPException(403, "Only the owner can give someone the admin role")
     if b.status and b.status not in ("active", "disabled", "rejected", "pending"):
         raise HTTPException(422, "Unknown status")
-    with Session() as s:
-        u = s.get(User, uid)
-        if not u:
-            raise HTTPException(404, "No such account")
-        if u.username == a.username and ((b.role and b.role != "admin") or (b.status and b.status != "active")):
-            raise HTTPException(422, "You cannot demote or disable your own admin account")
-        if u.username == OWNER and a.username != OWNER:
-            raise HTTPException(403, "The owner account can only be changed by the owner")
-        changes = []
-        if b.role and b.role != u.role:
-            changes.append(f"role {u.role}→{b.role}"); u.role = b.role
-        if b.status and b.status != u.status:
-            if u.status == "pending" and b.status == "active":
-                u.approved_by = a.username
-            changes.append(f"status {u.status}→{b.status}"); u.status = b.status
-        s.commit()
-        target = u.username
-    audit(a.username, "USER_UPDATED", target, ", ".join(changes))
+    u = get_user(uid=uid)
+    if not u:
+        raise HTTPException(404, "No such account")
+    if u.username == a.username and ((b.role and b.role != "admin") or (b.status and b.status != "active")):
+        raise HTTPException(422, "You cannot demote or disable your own admin account")
+    if u.username == OWNER and a.username != OWNER:
+        raise HTTPException(403, "The owner account can only be changed by the owner")
+    changes, upd = [], {}
+    if b.role and b.role != u.role:
+        changes.append(f"role {u.role}→{b.role}"); upd["role"] = b.role
+    if b.status and b.status != u.status:
+        if u.status == "pending" and b.status == "active":
+            upd["approved_by"] = a.username
+        changes.append(f"status {u.status}→{b.status}"); upd["status"] = b.status
+    update_user(uid, **upd)
+    audit(a.username, "USER_UPDATED", u.username, ", ".join(changes))
     return {"message": "Updated", "changes": changes}
 
 
 @app.post("/admin/users/{uid}/reset-password")
 def admin_reset(uid: int, a: User = Depends(require("admin"))):
+    u = get_user(uid=uid)
+    if not u:
+        raise HTTPException(404, "No such account")
+    if u.username == OWNER and a.username != OWNER:
+        raise HTTPException(403, "The owner account can only be changed by the owner")
     pw = temp_password()
-    with Session() as s:
-        u = s.get(User, uid)
-        if not u:
-            raise HTTPException(404, "No such account")
-        if u.username == OWNER and a.username != OWNER:
-            raise HTTPException(403, "The owner account can only be changed by the owner")
-        u.password_hash, u.must_change_password, u.failed_attempts, u.locked_until = hash_pw(pw), True, 0, None
-        s.commit()
-        target = u.username
-    audit(a.username, "PASSWORD_RESET", target)
+    update_user(uid, password_hash=hash_pw(pw), must_change_password=1, failed_attempts=0, locked_until=None)
+    audit(a.username, "PASSWORD_RESET", u.username)
     return {"temporary_password": pw}
 
 
 @app.get("/admin/audit")
 def admin_audit(limit: int = Query(300, le=5000), a: User = Depends(require("admin"))):
-    with Session() as s:
-        rows = s.scalars(select(Audit).order_by(Audit.ts.desc()).limit(limit)).all()
-        return [{"ts": r.ts.isoformat(timespec="seconds"), "actor": r.actor, "action": r.action,
-                 "target": r.target, "detail": r.detail} for r in rows]
+    return list_audit(limit)
 
 
 # ================================================================== DATA (viewer+)

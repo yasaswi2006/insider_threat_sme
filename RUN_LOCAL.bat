@@ -5,7 +5,7 @@ echo ============================================
 echo   TERPE v2 - starting on this laptop
 echo ============================================
 echo Installing / checking packages (first time takes a few minutes)...
-python -m pip install -q fastapi uvicorn sqlalchemy bcrypt PyJWT pyarrow joblib scikit-learn pandas numpy requests streamlit plotly
+python -m pip install -q fastapi uvicorn PyJWT pyarrow joblib scikit-learn pandas numpy requests streamlit plotly
 if not exist ".streamlit\secrets.toml" echo API_URL = "http://127.0.0.1:8000"> ".streamlit\secrets.toml"
 set ADMIN_USERNAME=yasaswi
 set OWNER_USERNAME=yasaswi
