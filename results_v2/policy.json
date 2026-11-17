@@ -1,0 +1,51 @@
+{
+  "work_hours": {
+    "start": 7,
+    "end": 19,
+    "weekend_is_after_hours": true
+  },
+  "provisioning_days": 30,
+  "multi_pc_roles": [
+    "ITAdmin"
+  ],
+  "executable_extensions": [
+    ".exe",
+    ".dll",
+    ".bat",
+    ".msi",
+    ".ps1",
+    ".vbs"
+  ],
+  "executable_allowed_roles": [
+    "ITAdmin"
+  ],
+  "rules": {
+    "FOREIGN_PC": {
+      "severity": 3,
+      "text": "Used a PC this employee is not approved to use"
+    },
+    "USB_NOT_PROVISIONED": {
+      "severity": 3,
+      "text": "Removable media used, but employee is not approved for USB"
+    },
+    "EXECUTABLE_TRANSFER": {
+      "severity": 3,
+      "text": "New executable moved via removable media by a non-IT role"
+    },
+    "AFTER_HOURS": {
+      "severity": 1,
+      "text": "After-hours activity by an employee not approved for after-hours work"
+    },
+    "NEW_FILE_TYPE": {
+      "severity": 1,
+      "text": "File type never handled by this employee before"
+    }
+  },
+  "decay": 0.8,
+  "alert_budget": 0.01,
+  "fusion_weights": {
+    "anomaly": 1.0,
+    "policy": 1.0,
+    "chain": 1.0
+  }
+}
